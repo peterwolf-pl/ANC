@@ -373,7 +373,7 @@ def lines_to_acode(
                 emit_turn_in_place(out, dtheta, feed_turn)
             heading = axis_heading
             if abs(delta) > 1e-9:
-                emit_straight(out, delta, feed_lin)
+                emit_straight(out, abs(delta), feed_lin)
 
         dy = ny - y
         if abs(dy) > 1e-9:
