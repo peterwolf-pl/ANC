@@ -248,7 +248,7 @@
               <div class="label"><b>Przejście na kolejną linię</b><span>Tryb zmiany wiersza rastra</span></div>
               <div class="control">
                 <select id="line_advance">
-                  <option value="default" selected>Obecne</option>
+                  <option value="soft" selected>Obecne (łagodne)</option>
                   <option value="turn90">Klasyczne: obrót 90 + przejazd prostopadły</option>
                 </select>
               </div>
@@ -459,7 +459,7 @@
               <div class="label"><b>Przejście na kolejną linię</b><span>Tryb zmiany wiersza rastra</span></div>
               <div class="control">
                 <select id="t_line_advance">
-                  <option value="default" selected>Obecne</option>
+                  <option value="soft" selected>Obecne (łagodne)</option>
                   <option value="turn90">Klasyczne: obrót 90 + przejazd prostopadły</option>
                 </select>
               </div>
@@ -775,15 +775,36 @@
       if (!sim.points || sim.points.length < 2) return;
       ctx.save();
       ctx.lineWidth = 2 * map.dpr;
-      ctx.globalAlpha = 0.9;
+      ctx.globalAlpha = 0.95;
       ctx.beginPath();
-      for (let i = 0; i <= sim.idx; i++) {
-        const p = sim.points[i];
-        const q = worldToCanvas(p.x, p.y, map);
-        if (i === 0) ctx.moveTo(q.x, q.y);
-        else ctx.lineTo(q.x, q.y);
+
+      const maxIdx = Math.min(sim.idx, Math.max(0, sim.points.length - 1));
+      let lastColor = null;
+
+      for (let i = 1; i <= maxIdx; i++) {
+        const prev = sim.points[i - 1];
+        const curr = sim.points[i];
+        const penDown = (curr.pen_down !== undefined) ? curr.pen_down : (prev.pen_down !== undefined ? prev.pen_down : true);
+        const color = penDown ? "#000" : "#b3b3b3";
+
+        const qPrev = worldToCanvas(prev.x, prev.y, map);
+        const qCurr = worldToCanvas(curr.x, curr.y, map);
+
+        if (lastColor === null || color !== lastColor) {
+          if (lastColor !== null) {
+            ctx.strokeStyle = lastColor;
+            ctx.stroke();
+            ctx.beginPath();
+          }
+          ctx.moveTo(qPrev.x, qPrev.y);
+          lastColor = color;
+        }
+        ctx.lineTo(qCurr.x, qCurr.y);
       }
-      ctx.stroke();
+      if (lastColor !== null) {
+        ctx.strokeStyle = lastColor;
+        ctx.stroke();
+      }
       ctx.restore();
     }
 

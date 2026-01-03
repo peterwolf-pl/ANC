@@ -254,6 +254,10 @@ def _safe_choice(name: str, default: str, allowed: Tuple[str, ...]) -> str:
     v = (request.form.get(name, "").strip() or default)
     return v if v in allowed else default
 
+def _parse_line_advance(field: str) -> str:
+    v = _safe_choice(field, "soft", ("soft", "turn90", "default"))
+    return "soft" if v == "default" else v
+
 def _assert_tools_exist() -> Optional[str]:
     for p in [ARTACODEPNG_PATH, ACODEVIZ_PATH, ACODE_PY_PATH]:
         if not os.path.isfile(p):
@@ -281,7 +285,13 @@ def _script_help_text(path: str) -> str:
 
 def _supports_arg(script_path: str, arg: str) -> bool:
     txt = _script_help_text(script_path)
-    return arg in txt
+    if arg in txt:
+        return True
+    try:
+        with open(script_path, "r", encoding="utf-8", errors="ignore") as f:
+            return arg in f.read()
+    except OSError:
+        return False
 
 # ----------------------------
 # Settings parsing without importing acode.py
@@ -365,14 +375,15 @@ def acode_to_trajectory(
     x = 0.0
     y = 0.0
     th = 0.0
-    pts: List[Dict[str, float]] = [{"x": x, "y": y, "theta": th}]
+    pen_down = True
+    pts: List[Dict[str, float]] = [{"x": x, "y": y, "theta": th, "pen_down": pen_down}]
 
     xmin = xmax = x
     ymin = ymax = y
 
-    def add_pt(px: float, py: float, pth: float):
+    def add_pt(px: float, py: float, pth: float, p_pen: bool):
         nonlocal xmin, xmax, ymin, ymax
-        pts.append({"x": px, "y": py, "theta": pth})
+        pts.append({"x": px, "y": py, "theta": pth, "pen_down": p_pen})
         xmin = min(xmin, px)
         xmax = max(xmax, px)
         ymin = min(ymin, py)
@@ -388,7 +399,7 @@ def acode_to_trajectory(
 
         if s == "H" and home_resets_pose:
             x, y, th = 0.0, 0.0, 0.0
-            add_pt(x, y, th)
+            add_pt(x, y, th, pen_down)
             continue
 
         if s.startswith("W"):
@@ -422,11 +433,16 @@ def acode_to_trajectory(
 
             for _ in range(n):
                 x, y, th = _integrate_step(x, y, th, dl_i, dr_i, wheelbase_mm, turn_gain)
-                add_pt(x, y, th)
+                add_pt(x, y, th, pen_down)
 
             continue
 
         if s.startswith("P"):
+            if "U" in s.upper():
+                pen_down = False
+            elif "D" in s.upper():
+                pen_down = True
+            add_pt(x, y, th, pen_down)
             continue
 
     if abs(xmax - xmin) < 1e-6:
@@ -613,12 +629,10 @@ def generate_from_png(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if params.get("seed") is not None:
         cmd += ["--seed", str(params["seed"])]
 
-    line_adv = params.get("line_advance", "default")
-    if line_adv != "default":
-        if _supports_arg(ARTACODEPNG_PATH, "--line-advance"):
-            cmd += ["--line-advance", line_adv]
-        else:
-            warn.append("artacodepng.py does not support --line-advance (ignored)")
+    if _supports_arg(ARTACODEPNG_PATH, "--line-advance"):
+        cmd += ["--line-advance", params["line_advance"]]
+    elif params["line_advance"] != "soft":
+        warn.append("artacodepng.py does not support --line-advance (using soft)")
 
     p1 = _run_cmd(cmd, cwd=HERE)
     if p1.returncode != 0 or not os.path.isfile(out_acode):
@@ -870,7 +884,7 @@ def api_gen():
     f.save(png_path)
 
     params = {
-        "line_advance": _safe_choice("line_advance", "default", ("default", "turn90")),
+        "line_advance": _parse_line_advance("line_advance"),
         "img_width_mm": _safe_float("img_width_mm", 120.0),
         "work_width_px": _safe_int("work_width_px", 1600),
         "line_spacing_mm": _safe_float("line_spacing_mm", 0.7),
@@ -971,7 +985,7 @@ def api_text_outline():
         return jsonify({"ok": False, "error": f"render failed: {e}"}), 500
 
     params = {
-        "line_advance": _safe_choice("line_advance", "default", ("default", "turn90")),
+        "line_advance": _parse_line_advance("line_advance"),
         "img_width_mm": line_width_mm,
         "work_width_px": _safe_int("work_width_px", 2200),
         "line_spacing_mm": _safe_float("line_spacing_mm", 0.6),

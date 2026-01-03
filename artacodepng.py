@@ -246,18 +246,21 @@ def build_scanline_paths_no_x_drift(
 
     return paths
 
-def lines_to_acode_soft_rows(
+def lines_to_acode(
     paths: List[List[PrimLine]],
     feed_lin: int,
     feed_turn: int,
     row_angle_deg: float,
     soft_min_dy_mm: float,
+    line_advance: str,
 ) -> List[str]:
-    if row_angle_deg <= 0 or row_angle_deg >= 90:
-        raise ValueError("row_angle_deg should be in (0, 90)")
+    soft_rows = (line_advance == "soft")
+    if soft_rows:
+        if row_angle_deg <= 0 or row_angle_deg >= 90:
+            raise ValueError("row_angle_deg should be in (0, 90)")
 
-    alpha = math.radians(row_angle_deg)
-    tan_a = math.tan(alpha)
+        alpha = math.radians(row_angle_deg)
+        tan_a = math.tan(alpha)
 
     x = 0.0
     y = 0.0
@@ -311,9 +314,35 @@ def lines_to_acode_soft_rows(
         go_to_point(wx, wy)
         go_to_point(nx, ny)
 
+    def go_to_point_turn90(nx: float, ny: float):
+        nonlocal x, y, heading
+
+        dy = ny - y
+        if abs(dy) > 1e-9:
+            turn_dir = math.copysign(math.pi / 2.0, dy)
+            emit_turn_in_place(out, turn_dir, feed_turn)
+            heading = wrap_pi(heading + turn_dir)
+            emit_straight(out, abs(dy), feed_lin)
+            y = ny
+            emit_turn_in_place(out, -turn_dir, feed_turn)
+            heading = wrap_pi(heading - turn_dir)
+
+        dx = nx - x
+        if abs(dx) > 1e-9:
+            target = math.atan2(0.0, dx) if abs(dx) > 1e-9 else heading
+            dtheta = wrap_pi(target - heading)
+            if abs(dtheta) > 1e-9:
+                emit_turn_in_place(out, dtheta, feed_turn)
+                heading = wrap_pi(heading + dtheta)
+            emit_straight(out, abs(dx), feed_lin)
+            x = nx
+
     for path in paths:
         set_pen(False)
-        go_to_point_soft_row(path[0].p0[0], path[0].p0[1])
+        if soft_rows:
+            go_to_point_soft_row(path[0].p0[0], path[0].p0[1])
+        else:
+            go_to_point_turn90(path[0].p0[0], path[0].p0[1])
 
         set_pen(True)
         for ln in path:
@@ -356,6 +385,8 @@ def main() -> int:
     ap.add_argument("--row-angle-deg", type=float, default=18.0, help="Max angle to X for row-advance legs (15-20)")
     ap.add_argument("--soft-min-dy-mm", type=float, default=0.3, help="Apply soft row-advance only if |dy| >= this value")
 
+    ap.add_argument("--line-advance", choices=["soft", "turn90"], default="soft", help="Row change mode")
+
     ap.add_argument("--feed-lin", type=int, default=1200)
     ap.add_argument("--feed-turn", type=int, default=800)
     args = ap.parse_args()
@@ -392,12 +423,13 @@ def main() -> int:
         scan=args.scan,
     )
 
-    acode = lines_to_acode_soft_rows(
+    acode = lines_to_acode(
         paths=paths,
         feed_lin=args.feed_lin,
         feed_turn=args.feed_turn,
         row_angle_deg=args.row_angle_deg,
         soft_min_dy_mm=args.soft_min_dy_mm,
+        line_advance=args.line_advance,
     )
 
     with open(out_path, "w", encoding="utf-8") as f:
