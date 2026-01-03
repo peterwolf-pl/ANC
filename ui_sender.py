@@ -24,10 +24,10 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 from io import BytesIO
 
-with contextlib.suppress(ImportError):
+try:  # pyserial is optional; serial mode is enabled only if installed
     import serial  # type: ignore
     from serial.tools import list_ports  # type: ignore
-else:  # pragma: no cover - pyserial optional
+except ImportError:  # pragma: no cover - optional dependency
     serial = None  # type: ignore
     list_ports = None  # type: ignore
 
