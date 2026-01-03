@@ -203,6 +203,7 @@ def build_scanline_paths_no_x_drift(
     flip_y: bool,
     height_mm: float,
     scan: str,  # "serpentine" | "ltr"
+    y_order: str,  # "top-down" | "bottom-up"
 ) -> List[List[PrimLine]]:
     if not rows:
         return []
@@ -218,6 +219,10 @@ def build_scanline_paths_no_x_drift(
     order = sorted(range(len(ys)), key=lambda i: ys[i])
     ys = [ys[i] for i in order]
     segs_rows = [segs_rows[i] for i in order]
+
+    if y_order == "bottom-up":
+        ys.reverse()
+        segs_rows.reverse()
 
     x_lo = margin_mm
     x_hi = margin_mm + img_width_mm
@@ -443,6 +448,7 @@ def main() -> int:
 
     ap.add_argument("--margin-mm", type=float, default=0.0, help="Offset everything by margin (mm)")
     ap.add_argument("--flip-y", action="store_true", help="Flip Y axis")
+    ap.add_argument("--y-order", choices=["top-down", "bottom-up"], default="top-down", help="Row traversal order")
 
     ap.add_argument("--scan", choices=["serpentine", "ltr"], default="serpentine", help="Row direction strategy")
 
@@ -494,6 +500,7 @@ def main() -> int:
         flip_y=args.flip_y,
         height_mm=height_mm,
         scan=args.scan,
+        y_order=args.y_order,
     )
 
     acode = lines_to_acode(

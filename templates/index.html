@@ -306,6 +306,16 @@
             </div>
 
             <div class="setting-item">
+              <div class="label"><b>y_order</b><span>Kolejność wierszy (góra→dół / dół→góra)</span></div>
+              <div class="control">
+                <select id="y_order">
+                  <option value="top-down" selected>góra → dół</option>
+                  <option value="bottom-up">dół → góra</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="setting-item">
               <div class="label"><b>x_mode</b><span>pixel albo step</span></div>
               <div class="control">
                 <select id="x_mode">
@@ -491,6 +501,28 @@
               <div class="label"><b>font</b><span>Wybierz font</span></div>
               <div class="control">
                 <select id="t_font"></select>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="setting-item">
+              <div class="label"><b>scan</b><span>serpentine albo ltr</span></div>
+              <div class="control">
+                <select id="t_scan">
+                  <option value="serpentine" selected>serpentine</option>
+                  <option value="ltr">ltr</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>y_order</b><span>Kolejność wierszy (góra→dół / dół→góra)</span></div>
+              <div class="control">
+                <select id="t_y_order">
+                  <option value="top-down" selected>góra → dół</option>
+                  <option value="bottom-up">dół → góra</option>
+                </select>
               </div>
             </div>
 
@@ -1041,6 +1073,7 @@
     fd.set("y_jitter_mm", formVal("y_jitter_mm"));
     fd.set("seed", formVal("seed"));
     fd.set("scan", qs("scan").value);
+    fd.set("y_order", qs("y_order").value);
     fd.set("x_mode", qs("x_mode").value);
     fd.set("x_step_mm", formVal("x_step_mm"));
     fd.set("row_angle_deg", formVal("row_angle_deg"));
@@ -1150,7 +1183,8 @@
     fd.set("min_segment_mm", formVal("min_segment_mm"));
     fd.set("y_jitter_mm", formVal("y_jitter_mm"));
     fd.set("seed", formVal("seed"));
-    fd.set("scan", qs("scan").value);
+    fd.set("scan", qs("t_scan").value);
+    fd.set("y_order", qs("t_y_order").value);
     fd.set("x_mode", qs("x_mode").value);
     fd.set("x_step_mm", formVal("x_step_mm"));
     fd.set("row_angle_deg", formVal("row_angle_deg"));
