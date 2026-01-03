@@ -258,6 +258,9 @@ def _parse_line_advance(field: str) -> str:
     v = _safe_choice(field, "soft", ("soft", "turn90", "real90", "default"))
     return "soft" if v == "default" else v
 
+def _parse_y_order(field: str) -> str:
+    return _safe_choice(field, "top-down", ("top-down", "bottom-up"))
+
 def _assert_tools_exist() -> Optional[str]:
     for p in [ARTACODEPNG_PATH, ACODEVIZ_PATH, ACODE_PY_PATH]:
         if not os.path.isfile(p):
@@ -613,6 +616,7 @@ def generate_from_png(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "--gamma", str(params["gamma"]),
         "--min-segment-mm", str(params["min_segment_mm"]),
         "--margin-mm", str(params["margin_mm"]),
+        "--y-order", params["y_order"],
         "--scan", params["scan"],
         "--y-jitter-mm", str(params["y_jitter_mm"]),
         "--x-mode", params["x_mode"],
@@ -895,6 +899,7 @@ def api_gen():
         "invert": _safe_bool("invert"),
         "margin_mm": _safe_float("margin_mm", 0.0),
         "flip_y": _safe_bool("flip_y"),
+        "y_order": _parse_y_order("y_order"),
         "scan": (request.form.get("scan", "serpentine") or "serpentine"),
         "y_jitter_mm": _safe_float("y_jitter_mm", 0.04),
         "seed": (None if (request.form.get("seed", "").strip() == "") else _safe_int("seed", 0)),
@@ -996,6 +1001,7 @@ def api_text_outline():
         "invert": _safe_bool("invert"),
         "margin_mm": _safe_float("margin_mm", 0.0),
         "flip_y": _safe_bool("flip_y"),
+        "y_order": _parse_y_order("y_order"),
         "scan": (request.form.get("scan", "serpentine") or "serpentine"),
         "y_jitter_mm": _safe_float("y_jitter_mm", 0.02),
         "seed": (None if (request.form.get("seed", "").strip() == "") else _safe_int("seed", 0)),
