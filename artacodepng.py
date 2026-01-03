@@ -319,18 +319,18 @@ def lines_to_acode(
 
         dy = ny - y
         if abs(dy) > 1e-9:
-            turn_dir = math.copysign(math.pi / 2.0, dy)
-            emit_turn_in_place(out, turn_dir, feed_turn)
-            heading = wrap_pi(heading + turn_dir)
+            target_heading = (math.pi / 2.0) if dy > 0 else (-math.pi / 2.0)
+            dtheta = wrap_pi(target_heading - heading)
+            if abs(dtheta) > 1e-9:
+                emit_turn_in_place(out, dtheta, feed_turn)
+                heading = wrap_pi(heading + dtheta)
             emit_straight(out, abs(dy), feed_lin)
             y = ny
-            emit_turn_in_place(out, -turn_dir, feed_turn)
-            heading = wrap_pi(heading - turn_dir)
 
         dx = nx - x
         if abs(dx) > 1e-9:
-            target = math.atan2(0.0, dx) if abs(dx) > 1e-9 else heading
-            dtheta = wrap_pi(target - heading)
+            target_heading = 0.0 if dx > 0 else math.pi
+            dtheta = wrap_pi(target_heading - heading)
             if abs(dtheta) > 1e-9:
                 emit_turn_in_place(out, dtheta, feed_turn)
                 heading = wrap_pi(heading + dtheta)

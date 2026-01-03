@@ -1113,6 +1113,23 @@
     fd.set("feed_lin", qs("t_feed_lin").value.trim());
     fd.set("feed_turn", qs("t_feed_turn").value.trim());
 
+    // mirror generator settings
+    fd.set("work_width_px", formVal("work_width_px"));
+    fd.set("line_spacing_mm", formVal("line_spacing_mm"));
+    fd.set("threshold", formVal("threshold"));
+    fd.set("gamma", formVal("gamma"));
+    fd.set("min_segment_mm", formVal("min_segment_mm"));
+    fd.set("y_jitter_mm", formVal("y_jitter_mm"));
+    fd.set("seed", formVal("seed"));
+    fd.set("scan", qs("scan").value);
+    fd.set("x_mode", qs("x_mode").value);
+    fd.set("x_step_mm", formVal("x_step_mm"));
+    fd.set("row_angle_deg", formVal("row_angle_deg"));
+    fd.set("soft_min_dy_mm", formVal("soft_min_dy_mm"));
+    fd.set("margin_mm", formVal("margin_mm"));
+    if (qs("invert").checked) fd.set("invert", "1");
+    if (qs("flip_y").checked) fd.set("flip_y", "1");
+
     // reuse viz settings from Generator tab
     fd.set("viz_dpi", formVal("viz_dpi"));
     fd.set("viz_arc_step_mm", formVal("viz_arc_step_mm"));
