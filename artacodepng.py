@@ -510,13 +510,19 @@ def main() -> int:
         y_order=args.y_order,
     )
 
+    # Jazda w dół->góra z miękkim przejściem potrafi przecinać istniejące linie.
+    # Wymuś osiowy przebieg między wierszami (turn90) w tym trybie, chyba że użytkownik wybierze coś innego.
+    line_advance_effective = args.line_advance
+    if args.y_order == "bottom-up" and args.line_advance == "soft":
+        line_advance_effective = "turn90"
+
     acode = lines_to_acode(
         paths=paths,
         feed_lin=args.feed_lin,
         feed_turn=args.feed_turn,
         row_angle_deg=args.row_angle_deg,
         soft_min_dy_mm=args.soft_min_dy_mm,
-        line_advance=args.line_advance,
+        line_advance=line_advance_effective,
         scan=args.scan,
     )
 
