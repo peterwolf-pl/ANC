@@ -320,27 +320,46 @@ def lines_to_acode(
 
         dy = ny - y
         if abs(dy) > 1e-9:
-            target_heading = (math.pi / 2.0) if dy > 0 else (-math.pi / 2.0)
+            target_heading = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
             dtheta = wrap_pi(target_heading - heading)
             if abs(dtheta) > 1e-9:
                 emit_turn_in_place(out, dtheta, feed_turn)
-                heading = wrap_pi(heading + dtheta)
+                heading = target_heading
+            heading = target_heading
             emit_straight(out, abs(dy), feed_lin)
             y = ny
 
         dx = nx - x
         if abs(dx) > 1e-9:
-            target_heading = 0.0 if dx > 0 else math.pi
+            target_heading = snap_axis_heading(0.0 if dx > 0 else math.pi)
             dtheta = wrap_pi(target_heading - heading)
             if abs(dtheta) > 1e-9:
                 emit_turn_in_place(out, dtheta, feed_turn)
-                heading = wrap_pi(heading + dtheta)
+                heading = target_heading
+            heading = target_heading
             emit_straight(out, abs(dx), feed_lin)
             x = nx
 
     def snap_axis_heading(theta: float) -> float:
         axes = [0.0, math.pi, math.pi / 2.0, -math.pi / 2.0]
         return min(axes, key=lambda a: abs(wrap_pi(theta - a)))
+
+    def _smoketest_real90() -> None:
+        """Minimal sanity check for REAL 90 orthogonality."""
+        sample_paths = [
+            [PrimLine((0.0, 0.0), (20.0, 0.0))],
+            [PrimLine((20.0, 5.0), (0.0, 5.0))],
+            [PrimLine((0.0, 10.0), (20.0, 10.0))],
+        ]
+        ac = lines_to_acode(
+            paths=sample_paths,
+            feed_lin=1200,
+            feed_turn=800,
+            row_angle_deg=row_angle_deg,
+            soft_min_dy_mm=soft_min_dy_mm,
+            line_advance="real90",
+        )
+        print("\n".join(ac))
 
     def go_to_point_real90(nx: float, ny: float, target_heading: float):
         nonlocal x, y, heading
