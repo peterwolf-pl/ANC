@@ -39,6 +39,7 @@ The scripts are standalone; install only the packages you need for the commands 
 - Example: `python print.py drawing.acode --host 192.168.4.1 --port 3333`
 
 ### Web UI (`ui_sender.py`)
+python3 ui_sender.py
 - Flask app combining a sender, PNG→ACODE generator, and simulator overlay in one interface.
 - Writes temporary files to `_ui_work/` and calls `artacodepng.py`/`acodeviz.py` internally.
 - Start with `python ui_sender.py` and open http://127.0.0.1:5000/.
@@ -47,3 +48,6 @@ The scripts are standalone; install only the packages you need for the commands 
 1. Prepare input artwork (DXF or PNG) and convert it to ACODE with `acode.py`, `acodepng.py`, or `artacodepng.py`.
 2. Preview the motion and bounding box with `acodeviz.py` to confirm orientation and scale.
 3. Stream the verified ACODE to the plotter using `print.py` or the web UI.
+
+OR 
+USE WEB UI 
