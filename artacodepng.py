@@ -343,18 +343,24 @@ def lines_to_acode(
 
         dy = ny - y
         if abs(dy) > 1e-9:
-            perp_heading = math.pi / 2.0 if dy > 0 else -math.pi / 2.0
-            dtheta1 = wrap_pi(perp_heading - heading)
-            if abs(dtheta1) > 1e-9:
-                emit_turn_in_place(out, dtheta1, feed_turn)
-                heading = wrap_pi(heading + dtheta1)
+            diff = wrap_pi(target_heading - heading)
+            if abs(abs(diff) - math.pi) < 1e-6:
+                turn_sign = 1.0 if diff > 0 else -1.0
+            else:
+                turn_sign = 1.0 if dy >= 0 else -1.0
+
+            dtheta1 = turn_sign * (math.pi / 2.0)
+            emit_turn_in_place(out, dtheta1, feed_turn)
+            heading = wrap_pi(heading + dtheta1)
+
             emit_straight(out, abs(dy), feed_lin)
             y = ny
 
-        dtheta2 = wrap_pi(target_heading - heading)
-        if abs(dtheta2) > 1e-9:
+            dtheta2 = turn_sign * (math.pi / 2.0)
             emit_turn_in_place(out, dtheta2, feed_turn)
             heading = wrap_pi(heading + dtheta2)
+
+        heading = target_heading
 
         dx = nx - x
         if abs(dx) > 1e-9:
