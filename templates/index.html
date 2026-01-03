@@ -148,6 +148,7 @@
       <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Text outline..."></textarea>
 
       <div class="row">
+        <label>Start line: <input id="start_line" value="1" inputmode="numeric" style="width:100px"></label>
         <button class="btn" id="start">Start</button>
         <button class="btn" id="pause">Pause</button>
         <button class="btn" id="resume">Resume</button>
@@ -161,7 +162,10 @@
     <div class="box">
       <div class="row">
         <div class="pill">Progress: <span id="progress" class="mono">0/0</span></div>
-        <div class="pill">Last: <span id="lastok" class="mono">-</span></div>
+        <div class="pill">Last OK: <span id="lastok" class="mono">-</span></div>
+        <div class="pill">Last OK line: <span id="lastokline" class="mono">-</span></div>
+        <div class="pill">Est. total: <span id="esttotal" class="mono">-</span></div>
+        <div class="pill">Est. remaining: <span id="estremaining" class="mono">-</span></div>
       </div>
 
       <div style="height:10px"></div>
@@ -171,6 +175,17 @@
         <div id="current" style="padding:10px; border:1px solid #eee; border-radius:10px; min-height:44px;"></div>
         <div id="error" class="err" style="margin-top:10px;"></div>
       </div>
+    </div>
+
+    <div style="height:12px"></div>
+
+    <div class="box">
+      <div class="row" style="align-items: center;">
+        <div style="font-weight:700;">Manual / serial</div>
+        <input id="manual_cmd" placeholder="Wpisz komendę ACODE / serial" style="flex:1; min-width:280px;">
+        <button class="btn" id="manual_send">Send</button>
+      </div>
+      <div class="small">Wysyła pojedynczą linię przez TCP, działa tylko gdy drukarka nie drukuje.</div>
     </div>
 
     <div style="height:12px"></div>
@@ -228,6 +243,36 @@
 
           <div class="err" id="jogerr"></div>
         </div>
+      </div>
+    </div>
+
+    <div style="height:12px"></div>
+
+    <div class="box">
+      <div class="small">Symulator: aktualnie załadowane ACODE + podświetlenie linii</div>
+      <div class="preview-area" style="margin-top:10px;">
+        <img id="senderPrev" alt="preview" />
+        <canvas id="simCanvasSender" class="simCanvas"></canvas>
+      </div>
+      <div class="sim-controls">
+        <button class="btn" id="simPlaySender">Play</button>
+        <button class="btn" id="simPauseSender">Pause</button>
+        <button class="btn" id="simResetSender">Reset</button>
+
+        <span class="pill">Speed</span>
+        <input id="simSpeedSender" type="range" min="0.25" max="6" step="0.25" value="2">
+        <span class="pill mono" id="simSpeedValSender">2.00x</span>
+
+        <span class="pill">Frame</span>
+        <input id="simScrubSender" type="range" min="0" max="0" step="1" value="0">
+        <span class="pill mono" id="simPosSender">0/0</span>
+
+        <span class="pill">Sprite scale</span>
+        <input id="simSpriteScaleSender" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+        <span class="pill mono" id="simSpriteScaleValSender">0.35</span>
+
+        <span class="pill">wheelbase</span>
+        <span class="pill mono" id="simWheelbaseSender">-</span>
       </div>
     </div>
   </div>
@@ -603,6 +648,12 @@
 
 <script>
   const qs = (id) => document.getElementById(id);
+  const fmtSeconds = (s) => {
+    if (!isFinite(s) || s <= 0) return "-";
+    const m = Math.floor(s / 60);
+    const sec = Math.round(s % 60);
+    return `${m}m ${sec}s`;
+  };
 
   // Tabs
   document.querySelectorAll(".tab").forEach(btn => {
@@ -615,6 +666,7 @@
       requestAnimationFrame(() => {
         resizeSim("gen");
         resizeSim("text");
+        resizeSim("sender");
       });
     };
   });
@@ -654,17 +706,31 @@
     qs("error").textContent = "";
     qs("current").textContent = "";
     qs("lastok").textContent = "-";
+    qs("lastokline").textContent = "-";
     qs("progress").textContent = "0/" + out.lines;
+    qs("esttotal").textContent = fmtSeconds(out.est_seconds || 0);
+    qs("estremaining").textContent = fmtSeconds(out.est_seconds || 0);
+    qs("start_line").value = "1";
+    await loadSenderViz().catch(() => {});
   }
 
   qs("load").onclick = () => loadAcode().catch(e => qs("error").textContent = e.message);
-  qs("start").onclick = () => post("/api/start", new FormData()).catch(e => qs("error").textContent = e.message);
+  qs("start").onclick = () => {
+    const fd = new FormData();
+    fd.set("start", qs("start_line").value || "1");
+    post("/api/start", fd).catch(e => qs("error").textContent = e.message);
+  };
   qs("pause").onclick = () => post("/api/pause", new FormData()).catch(e => qs("error").textContent = e.message);
   qs("resume").onclick = () => post("/api/resume", new FormData()).catch(e => qs("error").textContent = e.message);
   qs("stop").onclick = () => post("/api/stop", new FormData()).catch(e => qs("error").textContent = e.message);
 
   // SSE
   const ev = new EventSource("/events");
+  const applyEst = (obj) => {
+    if (obj.est_seconds !== undefined) qs("esttotal").textContent = fmtSeconds(obj.est_seconds);
+    if (obj.est_remaining !== undefined) qs("estremaining").textContent = fmtSeconds(obj.est_remaining);
+    if (obj.last_ok_idx !== undefined) qs("lastokline").textContent = obj.last_ok_idx ? String(obj.last_ok_idx) : "-";
+  };
   ev.onmessage = (e) => {
     const data = JSON.parse(e.data);
 
@@ -675,9 +741,15 @@
         qs("error").textContent = "";
         qs("lastok").textContent = "";
         if (payload.total && payload.idx) qs("progress").textContent = payload.idx + "/" + payload.total;
+        if (payload.idx) simSender.gotoLine(payload.idx);
       }
-      if (kind === "ok") qs("lastok").textContent = "OK";
+      if (kind === "ok") {
+        qs("lastok").textContent = "OK";
+        if (payload.idx) qs("lastokline").textContent = payload.idx;
+      }
       if (kind === "error") qs("error").textContent = payload.msg;
+      if (kind === "status" && payload.msg) qs("runstate").textContent = payload.msg;
+      if (payload) applyEst(payload);
       return;
     }
 
@@ -686,6 +758,8 @@
     qs("progress").textContent = idx + "/" + total;
     if (data.error) qs("error").textContent = data.error;
     qs("runstate").textContent = data.paused ? "paused" : (data.running ? "running" : "idle");
+    if (idx) simSender.gotoLine(idx);
+    applyEst(data);
   };
 
   // Jog helpers
@@ -743,6 +817,15 @@
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
 
+  qs("manual_send").onclick = () => {
+    qs("error").textContent = "";
+    const fd = new FormData();
+    fd.set("host", qs("host").value.trim());
+    fd.set("port", qs("port").value.trim());
+    fd.set("cmd", qs("manual_cmd").value.trim());
+    post("/api/manual", fd).catch(e => qs("error").textContent = e.message);
+  };
+
   // ----------------------------
   // Simulator (two instances: gen + text)
   // ----------------------------
@@ -751,6 +834,8 @@
       points: [],
       bounds: null,
       wheelbase_mm: 120,
+      linePoints: [],
+      linesTotal: 0,
       invert_y: false,
       equal: false,
       idx: 0,
@@ -984,16 +1069,12 @@
       draw();
     }
 
-    async function loadData(genId) {
-      const resp = await fetch("/api/vizdata/" + genId);
-      const ct = (resp.headers.get("content-type") || "").toLowerCase();
-      const text = await resp.text();
-      if (!ct.includes("application/json")) throw new Error("vizdata non-JSON: " + text.slice(0, 200));
-      const data = JSON.parse(text);
-
+    function applyData(data) {
       sim.points = data.points || [];
       sim.bounds = data.bounds || null;
       sim.wheelbase_mm = (data.settings && data.settings.wheelbase_mm) ? data.settings.wheelbase_mm : 120;
+      sim.linePoints = data.line_points || [];
+      sim.linesTotal = sim.linePoints.length;
       sim.equal = (data.viz && data.viz.equal) ? true : false;
       sim.invert_y = (data.viz && data.viz.invert_y) ? true : false;
 
@@ -1019,6 +1100,15 @@
       reset();
     }
 
+    async function loadData(genId) {
+      const resp = await fetch("/api/vizdata/" + genId);
+      const ct = (resp.headers.get("content-type") || "").toLowerCase();
+      const text = await resp.text();
+      if (!ct.includes("application/json")) throw new Error("vizdata non-JSON: " + text.slice(0, 200));
+      const data = JSON.parse(text);
+      applyData(data);
+    }
+
     // wiring
     qs(playId).onclick = () => play();
     qs(pauseId).onclick = () => pause();
@@ -1042,10 +1132,27 @@
       draw();
     };
 
+    function gotoLine(lineIdx) {
+      if (!sim.points || sim.points.length === 0) return;
+      if (!lineIdx || lineIdx < 1) return;
+      let target = null;
+      if (sim.linePoints && sim.linePoints.length >= lineIdx) {
+        target = sim.linePoints[lineIdx - 1];
+      }
+      if (target === null || target === undefined) {
+        const fraction = (lineIdx - 1) / Math.max(1, sim.linesTotal || sim.points.length);
+        target = Math.floor(fraction * sim.points.length);
+      }
+      sim.idx = Math.max(0, Math.min(target, Math.max(0, sim.points.length - 1)));
+      qs(scrubId).value = String(sim.idx);
+      qs(posId).textContent = sim.idx + "/" + Math.max(0, sim.points.length - 1);
+      draw();
+    }
+
     img.onload = () => { resize(); draw(); };
     window.addEventListener("resize", () => resize());
 
-    return { loadData, resize, reset };
+    return { loadData, resize, reset, gotoLine, applyData, get lineCount() { return sim.linesTotal; } };
   }
 
   const simGen = makeSim(
@@ -1066,9 +1173,27 @@
     "simSpriteScaleText", "simSpriteScaleValText"
   );
 
+  const simSender = makeSim(
+    "sender",
+    "senderPrev", "simCanvasSender",
+    "simWheelbaseSender", "simPosSender", "simScrubSender",
+    "simPlaySender", "simPauseSender", "simResetSender",
+    "simSpeedSender", "simSpeedValSender",
+    "simSpriteScaleSender", "simSpriteScaleValSender"
+  );
+  qs("senderPrev").src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
+  async function loadSenderViz() {
+    const resp = await fetch("/api/vizdata/current");
+    if (!resp.ok) throw new Error("no viz for current");
+    const data = await resp.json();
+    simSender.applyData(data);
+  }
+
   function resizeSim(which) {
     if (which === "gen") simGen.resize();
     if (which === "text") simText.resize();
+    if (which === "sender") simSender.resize();
   }
 
   // ----------------------------
@@ -1137,6 +1262,9 @@
 
     qs("acode").value = "loaded from generator (" + out.lines + " lines)\n";
     qs("loaded").textContent = "loaded lines: " + out.lines;
+    qs("start_line").value = "1";
+    if (lastGenId) qs("senderPrev").src = "/preview/" + lastGenId + ".png?ts=" + Date.now();
+    await loadSenderViz().catch(() => {});
 
     document.querySelector('.tab[data-tab="sender"]').click();
   };
@@ -1248,6 +1376,9 @@
 
     qs("acode").value = "loaded from text outline (" + out.lines + " lines)\n";
     qs("loaded").textContent = "loaded lines: " + out.lines;
+    qs("start_line").value = "1";
+    if (lastTextId) qs("senderPrev").src = "/preview/" + lastTextId + ".png?ts=" + Date.now();
+    await loadSenderViz().catch(() => {});
 
     document.querySelector('.tab[data-tab="sender"]').click();
   };

@@ -45,6 +45,9 @@ os.makedirs(os.path.join(HERE, "static"), exist_ok=True)
 
 events = queue.Queue(maxsize=2000)
 
+W_RE = re.compile(r"^W\s+L(-?\d+)\s+R(-?\d+)\s+F(\d+)\s*$")
+P_RE = re.compile(r"^P\s+([UD])\s*$")
+
 def push_event(kind: str, payload: dict):
     msg = {"kind": kind, "payload": payload, "ts": time.time()}
     try:
@@ -68,9 +71,12 @@ class JobState:
     port: int = DEFAULT_PORT
     lines: Optional[List[str]] = None
     idx: int = 0
+    last_ok_idx: int = 0
     last_sent: str = ""
     last_ok: bool = False
     error: str = ""
+    line_secs: List[float] = None  # type: ignore[assignment]
+    total_est_s: float = 0.0
 
 state = JobState()
 state_lock = threading.Lock()
@@ -148,9 +154,10 @@ def sender_worker():
         host = state.host
         port = state.port
         lines = state.lines or []
-        state.idx = 0
+        state.idx = state.idx if state.idx < len(lines) else 0
         state.last_sent = ""
         state.last_ok = False
+        state.last_ok_idx = 0
         state.error = ""
         state.stopping = False
 
@@ -207,6 +214,8 @@ def sender_worker():
             ok = wait_ok(sock, LINE_ACK_TIMEOUT_S)
             with state_lock:
                 state.last_ok = ok
+                if ok:
+                    state.last_ok_idx = idx + 1
 
             if not ok:
                 with state_lock:
@@ -297,6 +306,75 @@ def _supports_arg(script_path: str, arg: str) -> bool:
         return False
 
 # ----------------------------
+# Time estimate (mirrors print.py defaults)
+# ----------------------------
+def estimate_motion_seconds(
+    line: str,
+    feed_to_sps: float = 0.6,
+    min_sps: float = 50.0,
+    max_sps: float = 2500.0,
+    servo_settle_s: float = 0.18,
+    start_sps: float = 120.0,
+    accel_sps2: float = 8000.0,
+) -> float:
+    if line == "H":
+        return 0.25
+    if line == "END":
+        return 0.25
+    if line.startswith("E"):
+        return 0.25
+
+    if P_RE.match(line):
+        return servo_settle_s + 0.25
+
+    m = W_RE.match(line)
+    if not m:
+        return 0.6
+
+    l = abs(int(m.group(1)))
+    r = abs(int(m.group(2)))
+    f = int(m.group(3))
+    steps = max(l, r)
+    if steps <= 0:
+        return 0.25
+
+    v_target = f * feed_to_sps
+    if v_target < min_sps:
+        v_target = min_sps
+    if v_target > max_sps:
+        v_target = max_sps
+
+    v0 = start_sps
+    if v0 < min_sps:
+        v0 = min_sps
+    if v0 > v_target:
+        v0 = v_target
+
+    a = accel_sps2
+    if a < 1.0:
+        a = 1.0
+
+    ramp_steps = (v_target * v_target - v0 * v0) / (2.0 * a)
+    if ramp_steps < 0.0:
+        ramp_steps = 0.0
+
+    half = steps / 2.0
+    if ramp_steps > half:
+        ramp_steps = half
+
+    t_ramp = (v_target - v0) / a
+    if t_ramp < 0.0:
+        t_ramp = 0.0
+
+    cruise_steps = steps - 2.0 * ramp_steps
+    if cruise_steps < 0.0:
+        cruise_steps = 0.0
+
+    t_cruise = cruise_steps / v_target if v_target > 1e-9 else 9999.0
+
+    return (2.0 * t_ramp) + t_cruise + 0.30
+
+# ----------------------------
 # Settings parsing without importing acode.py
 # ----------------------------
 _NUM_RE = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
@@ -381,6 +459,7 @@ def acode_to_trajectory(
     th = 0.0
     pen_down = True
     pts: List[Dict[str, float]] = [{"x": x, "y": y, "theta": th, "pen_down": pen_down}]
+    line_points: List[int] = []
 
     xmin = xmax = x
     ymin = ymax = y
@@ -397,8 +476,10 @@ def acode_to_trajectory(
     arc_step_mm = max(1e-6, arc_step_mm)
 
     for raw in lines:
+        line_points.append(len(pts) - 1)
         s = raw.strip()
         if not s:
+            add_pt(x, y, th, pen_down)
             continue
 
         if s == "H" and home_resets_pose:
@@ -459,6 +540,7 @@ def acode_to_trajectory(
     return {
         "points": pts,
         "bounds": {"xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax},
+        "line_points": line_points,
         "settings": {
             "wheelbase_mm": wheelbase_mm,
             "steps_per_mm": steps_per_mm,
@@ -705,25 +787,31 @@ def api_load():
 
     lines = [ln.rstrip("\r\n") for ln in content.splitlines()]
     lines = [ln for ln in lines if ln.strip()]
+    line_secs = [estimate_motion_seconds(ln) for ln in lines]
 
     with state_lock:
         state.host = host
         state.port = port
         state.lines = lines
         state.idx = 0
+        state.last_ok_idx = 0
         state.error = ""
         state.last_sent = ""
         state.last_ok = False
+        state.line_secs = line_secs
+        state.total_est_s = sum(line_secs)
 
     push_event("status", {"msg": "loaded", "lines": len(lines)})
-    return jsonify({"ok": True, "lines": len(lines)})
+    return jsonify({"ok": True, "lines": len(lines), "est_seconds": state.total_est_s})
 
 @app.route("/api/start", methods=["POST"])
 def api_start():
     global worker_thread
+    start_idx = _safe_int("start", 1) - 1
     with state_lock:
         if not state.lines:
             return jsonify({"ok": False, "error": "no ACODE loaded"}), 400
+        state.idx = max(0, min(start_idx, len(state.lines) - 1))
         state.running = True
         state.paused = False
         state.stopping = False
@@ -761,6 +849,12 @@ def api_stop():
 
 @app.route("/events")
 def sse_events():
+    def _remaining():
+        with state_lock:
+            secs = state.line_secs or []
+            idx = state.idx
+        return float(sum(secs[idx:])) if secs else 0.0
+
     def gen():
         with state_lock:
             snap = {
@@ -770,12 +864,20 @@ def sse_events():
                 "total": len(state.lines or []),
                 "last_sent": state.last_sent,
                 "last_ok": state.last_ok,
+                "last_ok_idx": state.last_ok_idx,
                 "error": state.error,
+                "est_seconds": state.total_est_s,
+                "est_remaining": _remaining(),
             }
         yield "data: " + json.dumps(snap) + "\n\n"
 
         while True:
             msg = events.get()
+            if isinstance(msg, dict) and msg.get("kind") in {"line", "ok", "status", "done", "error"}:
+                msg.setdefault("payload", {})["est_remaining"] = _remaining()
+                with state_lock:
+                    msg["payload"]["est_seconds"] = state.total_est_s
+                    msg["payload"]["last_ok_idx"] = state.last_ok_idx
             yield "data: " + json.dumps(msg) + "\n\n"
 
     return Response(gen(), mimetype="text/event-stream")
@@ -871,6 +973,26 @@ def api_steppers():
         return jsonify({"ok": True, "line": cmd})
     push_event("error", {"msg": out["error"] or "steppers failed"})
     return jsonify({"ok": False, "error": out["error"] or "steppers failed"}), 500
+
+@app.route("/api/manual", methods=["POST"])
+def api_manual():
+    err = _busy_guard()
+    if err:
+        return jsonify({"ok": False, "error": err}), 409
+
+    host = request.form.get("host", "").strip() or "192.168.4.1"
+    port = _safe_int("port", DEFAULT_PORT)
+    cmd = (request.form.get("cmd", "") or "").strip()
+    if not cmd:
+        return jsonify({"ok": False, "error": "missing cmd"}), 400
+
+    push_event("line", {"idx": 0, "total": 0, "line": cmd})
+    out = send_one_command(host, port, cmd, timeout_s=LINE_ACK_TIMEOUT_S)
+    if out["ok"]:
+        push_event("ok", {"idx": 0})
+        return jsonify({"ok": True, "line": cmd})
+    push_event("error", {"msg": out["error"] or "manual failed"})
+    return jsonify({"ok": False, "error": out["error"] or "manual failed"}), 500
 
 # ----------------------------
 # Generator: PNG
@@ -1089,6 +1211,7 @@ def api_push_to_sender():
 
     lines = [ln.rstrip("\r\n") for ln in text.splitlines()]
     lines = [ln for ln in lines if ln.strip()]
+    line_secs = [estimate_motion_seconds(ln) for ln in lines]
 
     with state_lock:
         if host:
@@ -1100,9 +1223,12 @@ def api_push_to_sender():
                 pass
         state.lines = lines
         state.idx = 0
+        state.last_ok_idx = 0
         state.error = ""
         state.last_sent = ""
         state.last_ok = False
+        state.line_secs = line_secs
+        state.total_est_s = sum(line_secs)
 
     push_event("status", {"msg": "loaded_from_generator", "lines": len(lines)})
     return jsonify({"ok": True, "lines": len(lines)})
@@ -1140,6 +1266,26 @@ def api_vizdata(gen_id: str):
         home_resets_pose=home_resets_pose,
     )
     traj["viz"] = {"equal": viz_equal, "invert_y": viz_invert_y}
+    return jsonify(traj)
+
+@app.route("/api/vizdata/current", methods=["GET"])
+def api_vizdata_current():
+    with state_lock:
+        current_lines = list(state.lines or [])
+    if not current_lines:
+        abort(404)
+
+    machine = resolve_machine_settings(ACODE_PY_PATH)
+    traj = acode_to_trajectory(
+        lines=current_lines,
+        wheelbase_mm=machine["wheelbase_mm"],
+        steps_per_mm=machine["steps_per_mm"],
+        turn_gain=machine["turn_gain"],
+        arc_step_mm=1.0,
+        arc_step_deg=1.0,
+        home_resets_pose=True,
+    )
+    traj["viz"] = {"equal": False, "invert_y": False}
     return jsonify(traj)
 
 if __name__ == "__main__":
