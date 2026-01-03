@@ -50,9 +50,14 @@
     .gen-settings-scroll { max-height: 380px; overflow: auto; padding-right: 6px; }
 
     .preview-fullwidth {
-      width: 100vw;
-      margin-left: calc(50% - 50vw);
-      margin-right: calc(50% - 50vw);
+      width: 100%;
+      display: flex;
+      justify-content: center;
+    }
+
+    .preview-fullwidth .box {
+      width: 100%;
+      max-width: 1200px;
     }
 
     .preview-area {
