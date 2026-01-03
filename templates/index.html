@@ -504,6 +504,16 @@
               <div class="control"><input id="t_feed_turn" value="800" /></div>
             </div>
 
+            <div class="setting-item">
+              <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
+              <div class="control"><input type="checkbox" id="t_viz_equal" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
+              <div class="control"><input type="checkbox" id="t_viz_invert_y" /></div>
+            </div>
+
           </div>
         </div>
 
@@ -774,35 +784,42 @@
     function drawTrail(ctx, map) {
       if (!sim.points || sim.points.length < 2) return;
       ctx.save();
-      ctx.lineWidth = 2 * map.dpr;
+      const penDownWidth = 3 * map.dpr;
+      const penUpWidth = 1 * map.dpr;
       ctx.globalAlpha = 0.95;
       ctx.beginPath();
 
       const maxIdx = Math.min(sim.idx, Math.max(0, sim.points.length - 1));
       let lastColor = null;
+      let lastWidth = null;
 
       for (let i = 1; i <= maxIdx; i++) {
         const prev = sim.points[i - 1];
         const curr = sim.points[i];
         const penDown = (curr.pen_down !== undefined) ? curr.pen_down : (prev.pen_down !== undefined ? prev.pen_down : true);
-        const color = penDown ? "#000" : "#b3b3b3";
+        const color = penDown ? "#000" : "#d3d3d3";
+        const width = penDown ? penDownWidth : penUpWidth;
 
         const qPrev = worldToCanvas(prev.x, prev.y, map);
         const qCurr = worldToCanvas(curr.x, curr.y, map);
 
-        if (lastColor === null || color !== lastColor) {
+        if (lastColor === null || color !== lastColor || lastWidth === null || width !== lastWidth) {
           if (lastColor !== null) {
             ctx.strokeStyle = lastColor;
+            ctx.lineWidth = lastWidth || penDownWidth;
             ctx.stroke();
             ctx.beginPath();
           }
+          ctx.lineWidth = width;
           ctx.moveTo(qPrev.x, qPrev.y);
           lastColor = color;
+          lastWidth = width;
         }
         ctx.lineTo(qCurr.x, qCurr.y);
       }
       if (lastColor !== null) {
         ctx.strokeStyle = lastColor;
+        ctx.lineWidth = lastWidth || penDownWidth;
         ctx.stroke();
       }
       ctx.restore();
@@ -1080,6 +1097,14 @@
   // Text outline
   // ----------------------------
   let lastTextId = "";
+  const textVizSynced = { initialized: false };
+
+  function syncTextVizDefaults() {
+    if (textVizSynced.initialized) return;
+    qs("t_viz_equal").checked = qs("viz_equal").checked;
+    qs("t_viz_invert_y").checked = qs("viz_invert_y").checked;
+    textVizSynced.initialized = true;
+  }
 
   async function loadFonts() {
     try {
@@ -1101,6 +1126,8 @@
     qs("t_err").textContent = "";
     const text = qs("t_text").value.trim();
     if (!text) throw new Error("text is empty");
+
+    syncTextVizDefaults();
 
     const fd = new FormData();
     fd.set("text", text);
@@ -1134,8 +1161,8 @@
     fd.set("viz_dpi", formVal("viz_dpi"));
     fd.set("viz_arc_step_mm", formVal("viz_arc_step_mm"));
     fd.set("viz_arc_step_deg", formVal("viz_arc_step_deg"));
-    if (qs("viz_equal").checked) fd.set("viz_equal", "1");
-    if (qs("viz_invert_y").checked) fd.set("viz_invert_y", "1");
+    if (qs("t_viz_equal").checked) fd.set("viz_equal", "1");
+    if (qs("t_viz_invert_y").checked) fd.set("viz_invert_y", "1");
     if (qs("viz_home_resets_pose").checked) fd.set("viz_home_resets_pose", "1");
 
     const out = await post("/api/text_outline", fd);
@@ -1154,6 +1181,7 @@
 
   qs("t_push").onclick = async () => {
     qs("t_err").textContent = "";
+    syncTextVizDefaults();
     if (!lastTextId) throw new Error("generate first");
     const fd = new FormData();
     fd.set("host", qs("host").value.trim());
