@@ -253,8 +253,12 @@ def lines_to_acode(
     row_angle_deg: float,
     soft_min_dy_mm: float,
     line_advance: str,
+    scan: str,
 ) -> List[str]:
-    soft_rows = (line_advance == "soft")
+    # Serpentine już zawiera optymalny kierunek końcowy/następny start,
+    # więc przejazdy „ukośne” między wierszami są niepożądane.
+    # W tym trybie erzac miękkiego przejścia zastępujemy osiowym ruchem (jak turn90).
+    soft_rows = (line_advance == "soft") and (scan != "serpentine")
     real_90_rows = (line_advance == "real90")
     if soft_rows:
         if row_angle_deg <= 0 or row_angle_deg >= 90:
@@ -358,6 +362,7 @@ def lines_to_acode(
             row_angle_deg=row_angle_deg,
             soft_min_dy_mm=soft_min_dy_mm,
             line_advance="real90",
+            scan="ltr",
         )
         print("\n".join(ac))
 
@@ -498,6 +503,7 @@ def main() -> int:
         row_angle_deg=args.row_angle_deg,
         soft_min_dy_mm=args.soft_min_dy_mm,
         line_advance=args.line_advance,
+        scan=args.scan,
     )
 
     with open(out_path, "w", encoding="utf-8") as f:
