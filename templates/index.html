@@ -31,6 +31,8 @@
     input, select { padding: 8px 10px; border:1px solid #ddd; border-radius: 10px; }
 
     .divider { margin: 10px 0; border-top: 1px solid #eee; }
+    .serial-only { display: none; }
+    .tcp-only { display: inline-block; }
 
     /* Settings list */
     .setting-list { display:flex; flex-direction: column; gap: 10px; }
@@ -140,11 +142,24 @@
   <div class="panel active" id="panel-sender">
     <div class="box">
       <div class="row">
-        <label>Host: <input id="host" value="192.168.4.1"></label>
-        <label>Port: <input id="port" value="23" inputmode="numeric"></label>
+        <label>Transport
+          <select id="transport">
+            <option value="tcp" selected>WiFi (TCP)</option>
+            <option value="serial">Serial</option>
+          </select>
+        </label>
+        <label class="tcp-only">Host: <input id="host" value="192.168.4.1"></label>
+        <label class="tcp-only">Port: <input id="port" value="23" inputmode="numeric"></label>
+        <label class="serial-only">Serial port:
+          <input id="serial_port" value="/dev/ttyUSB0" list="serial_ports">
+          <datalist id="serial_ports"></datalist>
+        </label>
+        <label class="serial-only">Baud: <input id="serial_baud" value="115200" inputmode="numeric"></label>
+        <button class="btn serial-only" id="serial_refresh" title="Odśwież listę portów">🔄</button>
         <button class="btn" id="load">Load</button>
         <span class="pill" id="loaded">not loaded</span>
       </div>
+      <div class="row serial-only small" id="serial_err" style="color:#b00020;"></div>
 
       <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Text outline..."></textarea>
 
@@ -776,11 +791,43 @@
     return json;
   }
 
+  function applyTransport(fd) {
+    fd.set("transport", qs("transport").value);
+    fd.set("host", qs("host").value.trim());
+    fd.set("port", qs("port").value.trim());
+    fd.set("serial_port", qs("serial_port").value.trim());
+    fd.set("serial_baud", qs("serial_baud").value.trim());
+  }
+
+  function updateTransportUI() {
+    const isSerial = qs("transport").value === "serial";
+    document.querySelectorAll(".serial-only").forEach(el => el.style.display = isSerial ? "" : "none");
+    document.querySelectorAll(".tcp-only").forEach(el => el.style.display = isSerial ? "none" : "");
+  }
+
+  async function refreshSerialPorts(showError = false) {
+    const errEl = qs("serial_err");
+    if (errEl) errEl.textContent = "";
+    try {
+      const out = await getJson("/api/serial_ports");
+      const dl = qs("serial_ports");
+      if (!dl) return;
+      dl.innerHTML = "";
+      out.ports.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p.device;
+        opt.textContent = p.description || p.device;
+        dl.appendChild(opt);
+      });
+    } catch (e) {
+      if (showError && errEl) errEl.textContent = e.message || "błąd wykrywania portów";
+    }
+  }
+
   // Sender
   async function loadAcode() {
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("acode", qs("acode").value);
 
     const out = await post("/api/load", fd);
@@ -826,8 +873,7 @@
   async function jog(dir) {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("dir", dir);
     fd.set("jog_mm", qs("jog_mm").value.trim());
     fd.set("steps_per_mm", qs("steps_per_mm").value.trim());
@@ -844,8 +890,7 @@
   qs("pen_up").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("mode", "up");
     post("/api/pen", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -853,8 +898,7 @@
   qs("pen_down").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("mode", "down");
     post("/api/pen", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -862,8 +906,7 @@
   qs("step_enable").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("cmd", qs("step_en_cmd").value.trim());
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -871,8 +914,7 @@
   qs("step_disable").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("cmd", qs("step_dis_cmd").value.trim());
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1275,8 +1317,7 @@
     qs("generr").textContent = "";
     if (!lastGenId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
     qs("acode").value = "loaded from generator (" + out.lines + " lines)\n";
@@ -1386,8 +1427,7 @@
     syncTextVizDefaults();
     if (!lastTextId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
     qs("acode").value = "loaded from text outline (" + out.lines + " lines)\n";
@@ -1448,8 +1488,7 @@
     qs("dxf_err").textContent = "";
     if (!lastDxfId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
     qs("acode").value = "loaded from dxf (" + out.lines + " lines)\n";
@@ -1466,6 +1505,12 @@
     }
     window.location.href = "/download/" + lastDxfId + ".acode";
   };
+
+  // Transport UI wiring
+  qs("transport").onchange = () => updateTransportUI();
+  qs("serial_refresh").onclick = () => refreshSerialPorts(true);
+  updateTransportUI();
+  refreshSerialPorts(false);
 </script>
 </body>
 </html>

@@ -19,9 +19,17 @@ import threading
 import queue
 import subprocess
 import re
+import contextlib
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 from io import BytesIO
+
+with contextlib.suppress(ImportError):
+    import serial  # type: ignore
+    from serial.tools import list_ports  # type: ignore
+else:  # pragma: no cover - pyserial optional
+    serial = None  # type: ignore
+    list_ports = None  # type: ignore
 
 from flask import Flask, request, render_template, Response, jsonify, send_file, abort
 
@@ -66,6 +74,9 @@ class JobState:
     stopping: bool = False
     host: str = "192.168.4.1"
     port: int = DEFAULT_PORT
+    transport: str = "tcp"  # tcp or serial
+    serial_port: str = "/dev/ttyUSB0"
+    serial_baud: int = 115200
     lines: Optional[List[str]] = None
     idx: int = 0
     last_sent: str = ""
@@ -143,10 +154,109 @@ def send_one_command(host: str, port: int, line: str, timeout_s: float = LINE_AC
         except Exception:
             pass
 
+@dataclass
+class Transport:
+    kind: str
+    sock: Optional[socket.socket] = None
+    ser: Any = None
+
+def _open_transport(kind: str, host: str, port: int, serial_port: str, serial_baud: int) -> Transport:
+    if kind == "serial":
+        if serial is None:
+            raise RuntimeError("pyserial not installed")
+        ser = serial.Serial(serial_port, serial_baud, timeout=RECV_TIMEOUT_S, write_timeout=LINE_ACK_TIMEOUT_S)
+        return Transport(kind="serial", ser=ser)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((host, port))
+    return Transport(kind="tcp", sock=sock)
+
+def _close_transport(t: Transport):
+    if t.kind == "serial" and t.ser:
+        with contextlib.suppress(Exception):
+            t.ser.close()
+    if t.kind == "tcp" and t.sock:
+        with contextlib.suppress(Exception):
+            t.sock.close()
+
+def _recv_line_transport(t: Transport, timeout_s: float) -> Optional[str]:
+    if t.kind == "serial":
+        ser = t.ser
+        if not ser:
+            return None
+        ser.timeout = timeout_s
+        buf = bytearray()
+        start = time.time()
+        while True:
+            if time.time() - start > timeout_s:
+                return None
+            b = ser.read(1)
+            if not b:
+                continue
+            if b == b"\n":
+                return buf.decode("utf-8", errors="replace").strip()
+            if b != b"\r":
+                buf.extend(b)
+    sock = t.sock
+    if not sock:
+        return None
+    return recv_line(sock, timeout_s)
+
+def _send_line_transport(t: Transport, line: str):
+    if t.kind == "serial":
+        if not t.ser:
+            raise RuntimeError("serial not opened")
+        data = (line.strip() + "\n").encode("utf-8")
+        t.ser.write(data)
+        t.ser.flush()
+        return
+    if not t.sock:
+        raise RuntimeError("socket not opened")
+    send_line(t.sock, line)
+
+def _wait_ok_transport(t: Transport, timeout_s: float) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        resp = _recv_line_transport(t, RECV_TIMEOUT_S)
+        if not resp:
+            continue
+        s = resp.strip()
+        if s.startswith("OK"):
+            return True
+        if s.startswith("ERR"):
+            with state_lock:
+                state.error = s
+            push_event("error", {"msg": s})
+            return False
+    return False
+
+def send_one_command_transport(
+    transport: str,
+    host: str,
+    port: int,
+    serial_port: str,
+    serial_baud: int,
+    line: str,
+    timeout_s: float = LINE_ACK_TIMEOUT_S,
+) -> Dict[str, Any]:
+    try:
+        t = _open_transport(transport, host, port, serial_port, serial_baud)
+    except Exception as e:
+        return {"ok": False, "line": line, "error": str(e)}
+    try:
+        _send_line_transport(t, line)
+        ok = _wait_ok_transport(t, timeout_s)
+        return {"ok": ok, "line": line, "error": None if ok else "timeout or ERR"}
+    except Exception as e:
+        return {"ok": False, "line": line, "error": str(e)}
+    finally:
+        _close_transport(t)
 def sender_worker():
     with state_lock:
         host = state.host
         port = state.port
+        transport_kind = state.transport
+        serial_port = state.serial_port
+        serial_baud = state.serial_baud
         lines = state.lines or []
         state.idx = 0
         state.last_sent = ""
@@ -156,11 +266,20 @@ def sender_worker():
 
     push_event("status", {"msg": "connecting", "host": host, "port": port})
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock.connect((host, port))
+        t = _open_transport(transport_kind, host, port, serial_port, serial_baud)
         push_event("status", {"msg": "connected"})
+    except Exception as e:
+        with state_lock:
+            state.error = f"connection failed: {e}"
+        push_event("error", {"msg": state.error})
+        with state_lock:
+            state.running = False
+            state.paused = False
+            state.stopping = False
+        return
 
+    try:
         while True:
             with state_lock:
                 if state.stopping:
@@ -197,14 +316,14 @@ def sender_worker():
             push_event("line", {"idx": idx + 1, "total": total, "line": line})
 
             try:
-                send_line(sock, line)
-            except OSError as e:
+                _send_line_transport(t, line)
+            except Exception as e:
                 with state_lock:
                     state.error = f"send failed: {e}"
                 push_event("error", {"msg": state.error})
                 break
 
-            ok = wait_ok(sock, LINE_ACK_TIMEOUT_S)
+            ok = _wait_ok_transport(t, LINE_ACK_TIMEOUT_S)
             with state_lock:
                 state.last_ok = ok
 
@@ -220,15 +339,8 @@ def sender_worker():
                 state.idx += 1
 
         push_event("status", {"msg": "stopped"})
-    except OSError as e:
-        with state_lock:
-            state.error = f"connection failed: {e}"
-        push_event("error", {"msg": state.error})
     finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
+        _close_transport(t)
         with state_lock:
             state.running = False
             state.paused = False
@@ -786,6 +898,9 @@ def index():
 def api_load():
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    transport = (request.form.get("transport", "tcp") or "tcp").lower()
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
     content = request.form.get("acode", "")
 
     lines = [ln.rstrip("\r\n") for ln in content.splitlines()]
@@ -794,6 +909,9 @@ def api_load():
     with state_lock:
         state.host = host
         state.port = port
+        state.transport = transport
+        state.serial_port = serial_port
+        state.serial_baud = serial_baud
         state.lines = lines
         state.idx = 0
         state.error = ""
@@ -874,6 +992,15 @@ def _busy_guard() -> Optional[str]:
             return "busy: stop or pause printing before jog/pen/steppers"
     return None
 
+@app.route("/api/serial_ports", methods=["GET"])
+def api_serial_ports():
+    if list_ports is None:
+        return jsonify({"ok": False, "error": "pyserial not installed"}), 500
+    ports = []
+    for p in list_ports.comports():
+        ports.append({"device": p.device, "description": p.description})
+    return jsonify({"ok": True, "ports": ports})
+
 @app.route("/api/jog", methods=["POST"])
 def api_jog():
     err = _busy_guard()
@@ -883,6 +1010,9 @@ def api_jog():
     direction = (request.form.get("dir", "") or "").strip().lower()
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    transport = (request.form.get("transport", "tcp") or "tcp").lower()
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
 
     jog_mm = _safe_float("jog_mm", 10.0)
     steps_per_mm = _safe_float("steps_per_mm", 9.142857)
@@ -904,7 +1034,9 @@ def api_jog():
         return jsonify({"ok": False, "error": "bad dir"}), 400
 
     push_event("line", {"idx": 0, "total": 0, "line": line})
-    out = send_one_command(host, port, line, timeout_s=LINE_ACK_TIMEOUT_S)
+    out = send_one_command_transport(
+        transport, host, port, serial_port, serial_baud, line, timeout_s=LINE_ACK_TIMEOUT_S
+    )
     if out["ok"]:
         push_event("ok", {"idx": 0})
         return jsonify({"ok": True, "line": line})
@@ -919,6 +1051,9 @@ def api_pen():
 
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    transport = (request.form.get("transport", "tcp") or "tcp").lower()
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
     mode = (request.form.get("mode", "") or "").strip().lower()
 
     if mode == "up":
@@ -929,7 +1064,9 @@ def api_pen():
         return jsonify({"ok": False, "error": "bad mode"}), 400
 
     push_event("line", {"idx": 0, "total": 0, "line": line})
-    out = send_one_command(host, port, line, timeout_s=LINE_ACK_TIMEOUT_S)
+    out = send_one_command_transport(
+        transport, host, port, serial_port, serial_baud, line, timeout_s=LINE_ACK_TIMEOUT_S
+    )
     if out["ok"]:
         push_event("ok", {"idx": 0})
         return jsonify({"ok": True, "line": line})
@@ -944,13 +1081,18 @@ def api_steppers():
 
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    transport = (request.form.get("transport", "tcp") or "tcp").lower()
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
 
     cmd = (request.form.get("cmd", "") or "").strip()
     if not cmd:
         return jsonify({"ok": False, "error": "missing cmd"}), 400
 
     push_event("line", {"idx": 0, "total": 0, "line": cmd})
-    out = send_one_command(host, port, cmd, timeout_s=LINE_ACK_TIMEOUT_S)
+    out = send_one_command_transport(
+        transport, host, port, serial_port, serial_baud, cmd, timeout_s=LINE_ACK_TIMEOUT_S
+    )
     if out["ok"]:
         push_event("ok", {"idx": 0})
         return jsonify({"ok": True, "line": cmd})
@@ -1231,6 +1373,9 @@ def download_acode(gen_id: str):
 def api_push_to_sender():
     host = request.form.get("host", "").strip()
     port_s = request.form.get("port", "").strip()
+    transport = (request.form.get("transport", "") or "").lower()
+    serial_port = request.form.get("serial_port", "").strip()
+    serial_baud_s = request.form.get("serial_baud", "").strip()
 
     with gen_lock:
         if not gen_state.acode_text:
@@ -1246,6 +1391,15 @@ def api_push_to_sender():
         if port_s:
             try:
                 state.port = int(port_s)
+            except ValueError:
+                pass
+        if transport:
+            state.transport = transport
+        if serial_port:
+            state.serial_port = serial_port
+        if serial_baud_s:
+            try:
+                state.serial_baud = int(serial_baud_s)
             except ValueError:
                 pass
         state.lines = lines
