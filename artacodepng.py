@@ -202,7 +202,7 @@ def build_scanline_paths_no_x_drift(
     margin_mm: float,
     flip_y: bool,
     height_mm: float,
-    scan: str,  # "serpentine" | "ltr"
+    scan: str,  # "serpentine" | "ltr" | "ltr+rtl"
     y_order: str,  # "top-down" | "bottom-up"
 ) -> List[List[PrimLine]]:
     if not rows:
@@ -234,6 +234,7 @@ def build_scanline_paths_no_x_drift(
         segs2.sort(key=lambda a: min(a[0], a[1]))
 
         serp = (scan == "serpentine")
+        bounce = (scan == "ltr+rtl")
         left_to_right = True if (not serp) else (i % 2 == 0)
 
         seg_iter = segs2 if left_to_right else list(reversed(segs2))
@@ -248,6 +249,12 @@ def build_scanline_paths_no_x_drift(
             p1x = clamp(p1x, x_lo, x_hi)
 
             paths.append([PrimLine((p0x, y_mm), (p1x, y_mm))])
+
+        if bounce:
+            for x1, x2 in reversed(segs2):
+                p0x = clamp(x2, x_lo, x_hi)
+                p1x = clamp(x1, x_lo, x_hi)
+                paths.append([PrimLine((p0x, y_mm), (p1x, y_mm))])
 
     return paths
 
@@ -450,7 +457,7 @@ def main() -> int:
     ap.add_argument("--flip-y", action="store_true", help="Flip Y axis")
     ap.add_argument("--y-order", choices=["top-down", "bottom-up"], default="top-down", help="Row traversal order")
 
-    ap.add_argument("--scan", choices=["serpentine", "ltr"], default="serpentine", help="Row direction strategy")
+    ap.add_argument("--scan", choices=["serpentine", "ltr", "ltr+rtl"], default="serpentine", help="Row direction strategy")
 
     # Antybanding
     ap.add_argument("--y-jitter-mm", type=float, default=0.04, help="Random Y offset per row. Use 0 to disable.")
