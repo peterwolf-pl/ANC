@@ -361,30 +361,35 @@ def lines_to_acode(
         )
         print("\n".join(ac))
 
-    def go_to_point_real90(nx: float, ny: float, target_heading: float):
+    def axis_move_to(nx: float, ny: float, preferred_heading: float):
+        """Axis-aligned move for 90-degree modes: Y first, then X."""
         nonlocal x, y, heading
 
         dy = ny - y
         if abs(dy) > 1e-9:
-            axis_y = math.pi / 2.0 if dy > 0 else -math.pi / 2.0
-            dtheta1 = wrap_pi(axis_y - heading)
-            if abs(dtheta1) > 1e-9:
-                emit_turn_in_place(out, dtheta1, feed_turn)
-            heading = snap_axis_heading(axis_y)
-
+            axis_y = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
+            dtheta = wrap_pi(axis_y - heading)
+            if abs(dtheta) > 1e-9:
+                emit_turn_in_place(out, dtheta, feed_turn)
+            heading = axis_y
             emit_straight(out, abs(dy), feed_lin)
             y = ny
 
-        axis_x = snap_axis_heading(target_heading)
-        dtheta2 = wrap_pi(axis_x - heading)
-        if abs(dtheta2) > 1e-9:
-            emit_turn_in_place(out, dtheta2, feed_turn)
+        axis_x = snap_axis_heading(preferred_heading if abs(preferred_heading - math.pi) < 1e-6 or abs(preferred_heading) < 1e-6 else (0.0 if nx >= x else math.pi))
+        dtheta = wrap_pi(axis_x - heading)
+        if abs(dtheta) > 1e-9:
+            emit_turn_in_place(out, dtheta, feed_turn)
         heading = axis_x
 
         dx = nx - x
         if abs(dx) > 1e-9:
             emit_straight(out, abs(dx), feed_lin)
             x = nx
+
+    def go_to_point_real90(nx: float, ny: float, target_heading: float):
+        nonlocal x, y, heading
+
+        axis_move_to(nx, ny, target_heading)
 
     for path in paths:
         row_heading = 0.0
@@ -395,14 +400,14 @@ def lines_to_acode(
         set_pen(False)
         if soft_rows:
             go_to_point_soft_row(path[0].p0[0], path[0].p0[1])
-        elif real_90_rows:
-            go_to_point_real90(path[0].p0[0], path[0].p0[1], row_heading)
+            set_pen(True)
+            for ln in path:
+                go_to_point(ln.p1[0], ln.p1[1])
         else:
-            go_to_point_turn90(path[0].p0[0], path[0].p0[1])
-
-        set_pen(True)
-        for ln in path:
-            go_to_point(ln.p1[0], ln.p1[1])
+            axis_move_to(path[0].p0[0], path[0].p0[1], row_heading)
+            set_pen(True)
+            for ln in path:
+                axis_move_to(ln.p1[0], ln.p1[1], row_heading)
 
     set_pen(False)
     out.append(END_CMD)
