@@ -19,9 +19,17 @@ import threading
 import queue
 import subprocess
 import re
+import contextlib
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 from io import BytesIO
+
+try:  # pyserial is optional; serial mode is enabled only if installed
+    import serial  # type: ignore
+    from serial.tools import list_ports  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    serial = None  # type: ignore
+    list_ports = None  # type: ignore
 
 from flask import Flask, request, render_template, Response, jsonify, send_file, abort
 
@@ -66,6 +74,9 @@ class JobState:
     stopping: bool = False
     host: str = "192.168.4.1"
     port: int = DEFAULT_PORT
+    transport: str = "tcp"  # tcp or serial
+    serial_port: str = "/dev/ttyUSB0"
+    serial_baud: int = 115200
     lines: Optional[List[str]] = None
     idx: int = 0
     last_sent: str = ""
@@ -143,10 +154,109 @@ def send_one_command(host: str, port: int, line: str, timeout_s: float = LINE_AC
         except Exception:
             pass
 
+@dataclass
+class Transport:
+    kind: str
+    sock: Optional[socket.socket] = None
+    ser: Any = None
+
+def _open_transport(kind: str, host: str, port: int, serial_port: str, serial_baud: int) -> Transport:
+    if kind == "serial":
+        if serial is None:
+            raise RuntimeError("pyserial not installed")
+        ser = serial.Serial(serial_port, serial_baud, timeout=RECV_TIMEOUT_S, write_timeout=LINE_ACK_TIMEOUT_S)
+        return Transport(kind="serial", ser=ser)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((host, port))
+    return Transport(kind="tcp", sock=sock)
+
+def _close_transport(t: Transport):
+    if t.kind == "serial" and t.ser:
+        with contextlib.suppress(Exception):
+            t.ser.close()
+    if t.kind == "tcp" and t.sock:
+        with contextlib.suppress(Exception):
+            t.sock.close()
+
+def _recv_line_transport(t: Transport, timeout_s: float) -> Optional[str]:
+    if t.kind == "serial":
+        ser = t.ser
+        if not ser:
+            return None
+        ser.timeout = timeout_s
+        buf = bytearray()
+        start = time.time()
+        while True:
+            if time.time() - start > timeout_s:
+                return None
+            b = ser.read(1)
+            if not b:
+                continue
+            if b == b"\n":
+                return buf.decode("utf-8", errors="replace").strip()
+            if b != b"\r":
+                buf.extend(b)
+    sock = t.sock
+    if not sock:
+        return None
+    return recv_line(sock, timeout_s)
+
+def _send_line_transport(t: Transport, line: str):
+    if t.kind == "serial":
+        if not t.ser:
+            raise RuntimeError("serial not opened")
+        data = (line.strip() + "\n").encode("utf-8")
+        t.ser.write(data)
+        t.ser.flush()
+        return
+    if not t.sock:
+        raise RuntimeError("socket not opened")
+    send_line(t.sock, line)
+
+def _wait_ok_transport(t: Transport, timeout_s: float) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        resp = _recv_line_transport(t, RECV_TIMEOUT_S)
+        if not resp:
+            continue
+        s = resp.strip()
+        if s.startswith("OK"):
+            return True
+        if s.startswith("ERR"):
+            with state_lock:
+                state.error = s
+            push_event("error", {"msg": s})
+            return False
+    return False
+
+def send_one_command_transport(
+    transport: str,
+    host: str,
+    port: int,
+    serial_port: str,
+    serial_baud: int,
+    line: str,
+    timeout_s: float = LINE_ACK_TIMEOUT_S,
+) -> Dict[str, Any]:
+    try:
+        t = _open_transport(transport, host, port, serial_port, serial_baud)
+    except Exception as e:
+        return {"ok": False, "line": line, "error": str(e)}
+    try:
+        _send_line_transport(t, line)
+        ok = _wait_ok_transport(t, timeout_s)
+        return {"ok": ok, "line": line, "error": None if ok else "timeout or ERR"}
+    except Exception as e:
+        return {"ok": False, "line": line, "error": str(e)}
+    finally:
+        _close_transport(t)
 def sender_worker():
     with state_lock:
         host = state.host
         port = state.port
+        transport_kind = state.transport
+        serial_port = state.serial_port
+        serial_baud = state.serial_baud
         lines = state.lines or []
         state.idx = 0
         state.last_sent = ""
@@ -156,11 +266,20 @@ def sender_worker():
 
     push_event("status", {"msg": "connecting", "host": host, "port": port})
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock.connect((host, port))
+        t = _open_transport(transport_kind, host, port, serial_port, serial_baud)
         push_event("status", {"msg": "connected"})
+    except Exception as e:
+        with state_lock:
+            state.error = f"connection failed: {e}"
+        push_event("error", {"msg": state.error})
+        with state_lock:
+            state.running = False
+            state.paused = False
+            state.stopping = False
+        return
 
+    try:
         while True:
             with state_lock:
                 if state.stopping:
@@ -197,14 +316,14 @@ def sender_worker():
             push_event("line", {"idx": idx + 1, "total": total, "line": line})
 
             try:
-                send_line(sock, line)
-            except OSError as e:
+                _send_line_transport(t, line)
+            except Exception as e:
                 with state_lock:
                     state.error = f"send failed: {e}"
                 push_event("error", {"msg": state.error})
                 break
 
-            ok = wait_ok(sock, LINE_ACK_TIMEOUT_S)
+            ok = _wait_ok_transport(t, LINE_ACK_TIMEOUT_S)
             with state_lock:
                 state.last_ok = ok
 
@@ -220,15 +339,8 @@ def sender_worker():
                 state.idx += 1
 
         push_event("status", {"msg": "stopped"})
-    except OSError as e:
-        with state_lock:
-            state.error = f"connection failed: {e}"
-        push_event("error", {"msg": state.error})
     finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
+        _close_transport(t)
         with state_lock:
             state.running = False
             state.paused = False
@@ -690,6 +802,91 @@ def generate_from_png(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "meta": meta,
     }
 
+def generate_from_dxf(dxf_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    err = _assert_tools_exist()
+    if err:
+        return {"ok": False, "error": err}
+
+    gen_id = str(uuid.uuid4())[:8]
+    out_acode = os.path.join(GEN_DIR, f"{gen_id}.acode")
+    out_preview = os.path.join(GEN_DIR, f"{gen_id}.preview.png")
+
+    cmd = [
+        "python3",
+        ACODE_PY_PATH,
+        dxf_path,
+        "-o",
+        out_acode,
+        "--feed-lin",
+        str(params["feed_lin"]),
+        "--feed-turn",
+        str(params["feed_turn"]),
+        "--feed-arc",
+        str(params["feed_arc"]),
+        "--flat-step",
+        str(params["flat_step"]),
+        "--epsilon",
+        str(params["epsilon"]),
+        "--arc-seg-mm",
+        str(params["arc_seg_mm"]),
+        "--arc-seg-deg",
+        str(params["arc_seg_deg"]),
+    ]
+
+    p1 = _run_cmd(cmd, cwd=HERE)
+    if p1.returncode != 0 or not os.path.isfile(out_acode):
+        msg = (p1.stderr or p1.stdout or "").strip() or "dxf convert failed"
+        return {"ok": False, "error": msg}
+
+    cmd2 = [
+        "python3",
+        ACODEVIZ_PATH,
+        out_acode,
+        "-o",
+        out_preview,
+        "--acode-py",
+        ACODE_PY_PATH,
+        "--dpi",
+        str(params["viz_dpi"]),
+        "--arc-step-mm",
+        str(params["viz_arc_step_mm"]),
+        "--arc-step-deg",
+        str(params["viz_arc_step_deg"]),
+    ]
+    if params.get("viz_equal"):
+        cmd2.append("--equal")
+    if params.get("viz_invert_y"):
+        cmd2.append("--invert-y")
+    if params.get("viz_home_resets_pose"):
+        cmd2.append("--home-resets-pose")
+
+    p2 = _run_cmd(cmd2, cwd=HERE)
+    if p2.returncode != 0 or not os.path.isfile(out_preview):
+        msg = (p2.stderr or p2.stdout or "").strip() or "preview failed"
+        return {"ok": False, "error": msg}
+
+    with open(out_acode, "r", encoding="utf-8", errors="ignore") as f:
+        acode_text = f.read()
+
+    meta = {
+        "gen_id": gen_id,
+        "params": params,
+        "acode_lines": len([ln for ln in acode_text.splitlines() if ln.strip()]),
+        "generator_stdout": (p1.stdout or "").strip(),
+        "generator_stderr": (p1.stderr or "").strip(),
+        "viz_stdout": (p2.stdout or "").strip(),
+        "viz_stderr": (p2.stderr or "").strip(),
+    }
+
+    return {
+        "ok": True,
+        "gen_id": gen_id,
+        "acode_path": out_acode,
+        "preview_path": out_preview,
+        "acode_text": acode_text,
+        "meta": meta,
+    }
+
 # ----------------------------
 # Routes
 # ----------------------------
@@ -701,6 +898,9 @@ def index():
 def api_load():
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    transport = (request.form.get("transport", "tcp") or "tcp").lower()
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
     content = request.form.get("acode", "")
 
     lines = [ln.rstrip("\r\n") for ln in content.splitlines()]
@@ -709,6 +909,9 @@ def api_load():
     with state_lock:
         state.host = host
         state.port = port
+        state.transport = transport
+        state.serial_port = serial_port
+        state.serial_baud = serial_baud
         state.lines = lines
         state.idx = 0
         state.error = ""
@@ -724,6 +927,27 @@ def api_start():
     with state_lock:
         if not state.lines:
             return jsonify({"ok": False, "error": "no ACODE loaded"}), 400
+        host = state.host
+        port = state.port
+        transport = state.transport
+        serial_port = state.serial_port
+        serial_baud = state.serial_baud
+
+    # Preflight connection to fail fast instead of waiting inside worker
+    try:
+        t = _open_transport(transport, host, port, serial_port, serial_baud)
+        _close_transport(t)
+    except Exception as e:
+        msg = f"connection failed: {e}"
+        with state_lock:
+            state.running = False
+            state.paused = False
+            state.stopping = False
+            state.error = msg
+        push_event("error", {"msg": msg})
+        return jsonify({"ok": False, "error": msg}), 502
+
+    with state_lock:
         state.running = True
         state.paused = False
         state.stopping = False
@@ -789,6 +1013,15 @@ def _busy_guard() -> Optional[str]:
             return "busy: stop or pause printing before jog/pen/steppers"
     return None
 
+@app.route("/api/serial_ports", methods=["GET"])
+def api_serial_ports():
+    if list_ports is None:
+        return jsonify({"ok": False, "error": "pyserial not installed"}), 500
+    ports = []
+    for p in list_ports.comports():
+        ports.append({"device": p.device, "description": p.description})
+    return jsonify({"ok": True, "ports": ports})
+
 @app.route("/api/jog", methods=["POST"])
 def api_jog():
     err = _busy_guard()
@@ -798,6 +1031,9 @@ def api_jog():
     direction = (request.form.get("dir", "") or "").strip().lower()
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    transport = (request.form.get("transport", "tcp") or "tcp").lower()
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
 
     jog_mm = _safe_float("jog_mm", 10.0)
     steps_per_mm = _safe_float("steps_per_mm", 9.142857)
@@ -819,7 +1055,9 @@ def api_jog():
         return jsonify({"ok": False, "error": "bad dir"}), 400
 
     push_event("line", {"idx": 0, "total": 0, "line": line})
-    out = send_one_command(host, port, line, timeout_s=LINE_ACK_TIMEOUT_S)
+    out = send_one_command_transport(
+        transport, host, port, serial_port, serial_baud, line, timeout_s=LINE_ACK_TIMEOUT_S
+    )
     if out["ok"]:
         push_event("ok", {"idx": 0})
         return jsonify({"ok": True, "line": line})
@@ -834,6 +1072,9 @@ def api_pen():
 
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    transport = (request.form.get("transport", "tcp") or "tcp").lower()
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
     mode = (request.form.get("mode", "") or "").strip().lower()
 
     if mode == "up":
@@ -844,7 +1085,9 @@ def api_pen():
         return jsonify({"ok": False, "error": "bad mode"}), 400
 
     push_event("line", {"idx": 0, "total": 0, "line": line})
-    out = send_one_command(host, port, line, timeout_s=LINE_ACK_TIMEOUT_S)
+    out = send_one_command_transport(
+        transport, host, port, serial_port, serial_baud, line, timeout_s=LINE_ACK_TIMEOUT_S
+    )
     if out["ok"]:
         push_event("ok", {"idx": 0})
         return jsonify({"ok": True, "line": line})
@@ -859,13 +1102,18 @@ def api_steppers():
 
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    transport = (request.form.get("transport", "tcp") or "tcp").lower()
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
 
     cmd = (request.form.get("cmd", "") or "").strip()
     if not cmd:
         return jsonify({"ok": False, "error": "missing cmd"}), 400
 
     push_event("line", {"idx": 0, "total": 0, "line": cmd})
-    out = send_one_command(host, port, cmd, timeout_s=LINE_ACK_TIMEOUT_S)
+    out = send_one_command_transport(
+        transport, host, port, serial_port, serial_baud, cmd, timeout_s=LINE_ACK_TIMEOUT_S
+    )
     if out["ok"]:
         push_event("ok", {"idx": 0})
         return jsonify({"ok": True, "line": cmd})
@@ -911,8 +1159,8 @@ def api_gen():
         "feed_turn": _safe_int("feed_turn", 800),
 
         "viz_dpi": _safe_int("viz_dpi", 160),
-        "viz_arc_step_mm": _safe_float("viz_arc_step_mm", 1.0),
-        "viz_arc_step_deg": _safe_float("viz_arc_step_deg", 1.0),
+        "viz_arc_step_mm": _safe_float("viz_arc_step_mm", 0.4),
+        "viz_arc_step_deg": _safe_float("viz_arc_step_deg", 0.5),
         "viz_equal": _safe_bool("viz_equal"),
         "viz_invert_y": _safe_bool("viz_invert_y"),
         "viz_home_resets_pose": _safe_bool("viz_home_resets_pose"),
@@ -1013,8 +1261,8 @@ def api_text_outline():
         "feed_turn": _safe_int("feed_turn", 800),
 
         "viz_dpi": _safe_int("viz_dpi", 160),
-        "viz_arc_step_mm": _safe_float("viz_arc_step_mm", 1.0),
-        "viz_arc_step_deg": _safe_float("viz_arc_step_deg", 1.0),
+        "viz_arc_step_mm": _safe_float("viz_arc_step_mm", 0.4),
+        "viz_arc_step_deg": _safe_float("viz_arc_step_deg", 0.5),
         "viz_equal": _safe_bool("viz_equal"),
         "viz_invert_y": _safe_bool("viz_invert_y"),
         "viz_home_resets_pose": _safe_bool("viz_home_resets_pose"),
@@ -1055,6 +1303,71 @@ def api_text_outline():
     })
 
 # ----------------------------
+# Generator: DXF -> ACODE
+# ----------------------------
+@app.route("/api/dxf_to_acode", methods=["POST"])
+def api_dxf_to_acode():
+    if "dxf" not in request.files:
+        return jsonify({"ok": False, "error": "missing file field: dxf"}), 400
+
+    f = request.files["dxf"]
+    if not f.filename.lower().endswith(".dxf"):
+        return jsonify({"ok": False, "error": "only .dxf accepted"}), 400
+
+    gen_id_tmp = str(uuid.uuid4())[:8]
+    dxf_path = os.path.join(UPLOADS_DIR, f"{gen_id_tmp}.dxf")
+    f.save(dxf_path)
+
+    params = {
+        "feed_lin": _safe_int("feed_lin", 1200),
+        "feed_turn": _safe_int("feed_turn", 800),
+        "feed_arc": _safe_int("feed_arc", 800),
+        "flat_step": _safe_float("flat_step", 1.0),
+        "epsilon": _safe_float("epsilon", 0.25),
+        "arc_seg_mm": _safe_float("arc_seg_mm", 2.0),
+        "arc_seg_deg": _safe_float("arc_seg_deg", 5.0),
+        "viz_dpi": _safe_int("viz_dpi", 160),
+        "viz_arc_step_mm": _safe_float("viz_arc_step_mm", 0.4),
+        "viz_arc_step_deg": _safe_float("viz_arc_step_deg", 0.5),
+        "viz_equal": _safe_bool("viz_equal"),
+        "viz_invert_y": _safe_bool("viz_invert_y"),
+        "viz_home_resets_pose": _safe_bool("viz_home_resets_pose"),
+    }
+
+    result = generate_from_dxf(dxf_path, params)
+    if not result["ok"]:
+        with gen_lock:
+            gen_state.error = result["error"]
+        return jsonify({"ok": False, "error": result["error"]}), 500
+
+    machine = resolve_machine_settings(ACODE_PY_PATH)
+    with gen_lock:
+        gen_state.gen_id = result["gen_id"]
+        gen_state.png_path = ""
+        gen_state.acode_path = result["acode_path"]
+        gen_state.preview_path = result["preview_path"]
+        gen_state.acode_text = result["acode_text"]
+        gen_state.meta = result["meta"]
+        gen_state.error = ""
+        gen_state.viz_settings = {
+            "wheelbase_mm": machine["wheelbase_mm"],
+            "steps_per_mm": machine["steps_per_mm"],
+            "turn_gain": machine["turn_gain"],
+            "viz_arc_step_mm": params["viz_arc_step_mm"],
+            "viz_arc_step_deg": params["viz_arc_step_deg"],
+            "viz_home_resets_pose": params["viz_home_resets_pose"],
+            "viz_equal": params["viz_equal"],
+            "viz_invert_y": params["viz_invert_y"],
+        }
+
+    push_event("gen", {"msg": "dxf_generated", "gen_id": result["gen_id"], "lines": result["meta"]["acode_lines"]})
+    return jsonify({
+        "ok": True,
+        "gen_id": result["gen_id"],
+        "acode_lines": result["meta"]["acode_lines"],
+    })
+
+# ----------------------------
 # Preview + download + push
 # ----------------------------
 @app.route("/preview/<gen_id>.png", methods=["GET"])
@@ -1081,6 +1394,9 @@ def download_acode(gen_id: str):
 def api_push_to_sender():
     host = request.form.get("host", "").strip()
     port_s = request.form.get("port", "").strip()
+    transport = (request.form.get("transport", "") or "").lower()
+    serial_port = request.form.get("serial_port", "").strip()
+    serial_baud_s = request.form.get("serial_baud", "").strip()
 
     with gen_lock:
         if not gen_state.acode_text:
@@ -1096,6 +1412,15 @@ def api_push_to_sender():
         if port_s:
             try:
                 state.port = int(port_s)
+            except ValueError:
+                pass
+        if transport:
+            state.transport = transport
+        if serial_port:
+            state.serial_port = serial_port
+        if serial_baud_s:
+            try:
+                state.serial_baud = int(serial_baud_s)
             except ValueError:
                 pass
         state.lines = lines

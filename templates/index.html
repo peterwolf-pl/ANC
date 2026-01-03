@@ -31,6 +31,8 @@
     input, select { padding: 8px 10px; border:1px solid #ddd; border-radius: 10px; }
 
     .divider { margin: 10px 0; border-top: 1px solid #eee; }
+    .serial-only { display: none; }
+    .tcp-only { display: inline-block; }
 
     /* Settings list */
     .setting-list { display:flex; flex-direction: column; gap: 10px; }
@@ -133,17 +135,31 @@
     <button class="tab active" data-tab="sender">Printer</button>
     <button class="tab" data-tab="generator">Generator PNG</button>
     <button class="tab" data-tab="text">Text outline</button>
+    <button class="tab" data-tab="dxf">DXF → ACODE</button>
   </div>
 
   <!-- Sender -->
   <div class="panel active" id="panel-sender">
     <div class="box">
       <div class="row">
-        <label>Host: <input id="host" value="192.168.4.1"></label>
-        <label>Port: <input id="port" value="23" inputmode="numeric"></label>
+        <label>Transport
+          <select id="transport">
+            <option value="tcp" selected>WiFi (TCP)</option>
+            <option value="serial">Serial</option>
+          </select>
+        </label>
+        <label class="tcp-only">Host: <input id="host" value="192.168.4.1"></label>
+        <label class="tcp-only">Port: <input id="port" value="23" inputmode="numeric"></label>
+        <label class="serial-only">Serial port:
+          <input id="serial_port" value="/dev/ttyUSB0" list="serial_ports">
+          <datalist id="serial_ports"></datalist>
+        </label>
+        <label class="serial-only">Baud: <input id="serial_baud" value="115200" inputmode="numeric"></label>
+        <button class="btn serial-only" id="serial_refresh" title="Odśwież listę portów">🔄</button>
         <button class="btn" id="load">Load</button>
         <span class="pill" id="loaded">not loaded</span>
       </div>
+      <div class="row serial-only small" id="serial_err" style="color:#b00020;"></div>
 
       <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Text outline..."></textarea>
 
@@ -229,6 +245,138 @@
           <div class="err" id="jogerr"></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- DXF to ACODE -->
+  <div class="panel" id="panel-dxf">
+    <div class="gen-vertical">
+
+      <div class="box">
+        <div class="row">
+          <input type="file" id="dxf" accept=".dxf" />
+          <button class="btn" id="dxf_gen">Konwertuj</button>
+          <span class="pill" id="dxf_info">no output</span>
+          <span class="err" id="dxf_err"></span>
+        </div>
+
+        <div class="small">Konwersja DXF → ACODE z segmentacją łuków; sterowanie krokowcami z PID po stronie maszyny.</div>
+
+        <div class="divider"></div>
+
+        <div class="gen-settings-scroll">
+          <div class="setting-list">
+
+            <div class="setting-item">
+              <div class="label"><b>feed_lin</b><span>Feed dla jazdy prostej</span></div>
+              <div class="control"><input id="d_feed_lin" value="1200" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>feed_turn</b><span>Feed dla skrętów</span></div>
+              <div class="control"><input id="d_feed_turn" value="800" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>feed_arc</b><span>Feed dla łuków</span></div>
+              <div class="control"><input id="d_feed_arc" value="800" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>flat_step</b><span>Próbkowanie SPLINE/krzywych (mm)</span></div>
+              <div class="control"><input id="d_flat_step" value="1.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>epsilon</b><span>Uproszczenie linii (mm)</span></div>
+              <div class="control"><input id="d_epsilon" value="0.25" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>arc_seg_mm</b><span>Maks. długość segmentu łuku (mm)</span></div>
+              <div class="control"><input id="d_arc_seg_mm" value="2.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>arc_seg_deg</b><span>Maks. kąt segmentu łuku (deg)</span></div>
+              <div class="control"><input id="d_arc_seg_deg" value="5.0" /></div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_dpi</b><span>Podgląd: DPI</span></div>
+              <div class="control"><input id="d_viz_dpi" value="160" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
+              <div class="control"><input id="d_viz_arc_step_mm" value="0.4" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
+              <div class="control"><input id="d_viz_arc_step_deg" value="0.5" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
+              <div class="control"><input type="checkbox" id="d_viz_equal" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
+              <div class="control"><input type="checkbox" id="d_viz_invert_y" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_home_resets_pose</b><span>Podgląd: H resetuje pozycję</span></div>
+              <div class="control"><input type="checkbox" id="d_viz_home_resets_pose" /></div>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="row">
+          <button class="btn" id="dxf_push">Push to Sender</button>
+          <button class="btn" id="dxf_download">Download .acode</button>
+        </div>
+      </div>
+
+      <div class="preview-fullwidth">
+        <div class="box">
+          <div class="small">Preview + Symulator (maszyna.png)</div>
+
+          <div class="preview-area" style="margin-top:10px;">
+            <img id="d_previmg" alt="preview" />
+            <canvas id="simCanvasDxf" class="simCanvas"></canvas>
+          </div>
+
+          <div class="sim-controls">
+            <button class="btn" id="simPlayDxf">Play</button>
+            <button class="btn" id="simPauseDxf">Pause</button>
+            <button class="btn" id="simResetDxf">Reset</button>
+
+            <span class="pill">Speed</span>
+            <input id="simSpeedDxf" type="range" min="0.25" max="6" step="0.25" value="2">
+            <span class="pill mono" id="simSpeedValDxf">2.00x</span>
+
+            <span class="pill">Frame</span>
+            <input id="simScrubDxf" type="range" min="0" max="0" step="1" value="0">
+            <span class="pill mono" id="simPosDxf">0/0</span>
+
+            <span class="pill">Sprite scale</span>
+            <input id="simSpriteScaleDxf" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+            <span class="pill mono" id="simSpriteScaleValDxf">0.35</span>
+
+            <span class="pill">wheelbase</span>
+            <span class="pill mono" id="simWheelbaseDxf">-</span>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -380,12 +528,12 @@
 
             <div class="setting-item">
               <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
-              <div class="control"><input id="viz_arc_step_mm" value="1.0" /></div>
+              <div class="control"><input id="viz_arc_step_mm" value="0.4" /></div>
             </div>
 
             <div class="setting-item">
               <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
-              <div class="control"><input id="viz_arc_step_deg" value="1.0" /></div>
+              <div class="control"><input id="viz_arc_step_deg" value="0.5" /></div>
             </div>
 
             <div class="setting-item">
@@ -615,6 +763,7 @@
       requestAnimationFrame(() => {
         resizeSim("gen");
         resizeSim("text");
+        resizeSim("dxf");
       });
     };
   });
@@ -642,11 +791,43 @@
     return json;
   }
 
+  function applyTransport(fd) {
+    fd.set("transport", qs("transport").value);
+    fd.set("host", qs("host").value.trim());
+    fd.set("port", qs("port").value.trim());
+    fd.set("serial_port", qs("serial_port").value.trim());
+    fd.set("serial_baud", qs("serial_baud").value.trim());
+  }
+
+  function updateTransportUI() {
+    const isSerial = qs("transport").value === "serial";
+    document.querySelectorAll(".serial-only").forEach(el => el.style.display = isSerial ? "" : "none");
+    document.querySelectorAll(".tcp-only").forEach(el => el.style.display = isSerial ? "none" : "");
+  }
+
+  async function refreshSerialPorts(showError = false) {
+    const errEl = qs("serial_err");
+    if (errEl) errEl.textContent = "";
+    try {
+      const out = await getJson("/api/serial_ports");
+      const dl = qs("serial_ports");
+      if (!dl) return;
+      dl.innerHTML = "";
+      out.ports.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p.device;
+        opt.textContent = p.description || p.device;
+        dl.appendChild(opt);
+      });
+    } catch (e) {
+      if (showError && errEl) errEl.textContent = e.message || "błąd wykrywania portów";
+    }
+  }
+
   // Sender
   async function loadAcode() {
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("acode", qs("acode").value);
 
     const out = await post("/api/load", fd);
@@ -692,8 +873,7 @@
   async function jog(dir) {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("dir", dir);
     fd.set("jog_mm", qs("jog_mm").value.trim());
     fd.set("steps_per_mm", qs("steps_per_mm").value.trim());
@@ -710,8 +890,7 @@
   qs("pen_up").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("mode", "up");
     post("/api/pen", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -719,8 +898,7 @@
   qs("pen_down").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("mode", "down");
     post("/api/pen", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -728,8 +906,7 @@
   qs("step_enable").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("cmd", qs("step_en_cmd").value.trim());
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -737,8 +914,7 @@
   qs("step_disable").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("cmd", qs("step_dis_cmd").value.trim());
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1066,9 +1242,19 @@
     "simSpriteScaleText", "simSpriteScaleValText"
   );
 
+  const simDxf = makeSim(
+    "dxf",
+    "d_previmg", "simCanvasDxf",
+    "simWheelbaseDxf", "simPosDxf", "simScrubDxf",
+    "simPlayDxf", "simPauseDxf", "simResetDxf",
+    "simSpeedDxf", "simSpeedValDxf",
+    "simSpriteScaleDxf", "simSpriteScaleValDxf"
+  );
+
   function resizeSim(which) {
     if (which === "gen") simGen.resize();
     if (which === "text") simText.resize();
+    if (which === "dxf") simDxf.resize();
   }
 
   // ----------------------------
@@ -1131,8 +1317,7 @@
     qs("generr").textContent = "";
     if (!lastGenId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
     qs("acode").value = "loaded from generator (" + out.lines + " lines)\n";
@@ -1242,8 +1427,7 @@
     syncTextVizDefaults();
     if (!lastTextId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
     qs("acode").value = "loaded from text outline (" + out.lines + " lines)\n";
@@ -1262,6 +1446,71 @@
   };
 
   loadFonts();
+
+  // ----------------------------
+  // DXF -> ACODE
+  // ----------------------------
+  let lastDxfId = "";
+
+  async function convertDxf() {
+    qs("dxf_err").textContent = "";
+    const file = qs("dxf").files[0];
+    if (!file) throw new Error("select a DXF first");
+
+    const fd = new FormData();
+    fd.set("dxf", file);
+    fd.set("feed_lin", formVal("d_feed_lin"));
+    fd.set("feed_turn", formVal("d_feed_turn"));
+    fd.set("feed_arc", formVal("d_feed_arc"));
+    fd.set("flat_step", formVal("d_flat_step"));
+    fd.set("epsilon", formVal("d_epsilon"));
+    fd.set("arc_seg_mm", formVal("d_arc_seg_mm"));
+    fd.set("arc_seg_deg", formVal("d_arc_seg_deg"));
+
+    fd.set("viz_dpi", formVal("d_viz_dpi"));
+    fd.set("viz_arc_step_mm", formVal("d_viz_arc_step_mm"));
+    fd.set("viz_arc_step_deg", formVal("d_viz_arc_step_deg"));
+    if (qs("d_viz_equal").checked) fd.set("viz_equal", "1");
+    if (qs("d_viz_invert_y").checked) fd.set("viz_invert_y", "1");
+    if (qs("d_viz_home_resets_pose").checked) fd.set("viz_home_resets_pose", "1");
+
+    const out = await post("/api/dxf_to_acode", fd);
+    lastDxfId = out.gen_id;
+
+    qs("dxf_info").textContent = "gen_id: " + out.gen_id + " lines: " + out.acode_lines;
+    qs("d_previmg").src = "/preview/" + out.gen_id + ".png?ts=" + Date.now();
+    await simDxf.loadData(out.gen_id);
+  }
+
+  qs("dxf_gen").onclick = () => convertDxf().catch(e => qs("dxf_err").textContent = e.message);
+
+  qs("dxf_push").onclick = async () => {
+    qs("dxf_err").textContent = "";
+    if (!lastDxfId) throw new Error("generate first");
+    const fd = new FormData();
+    applyTransport(fd);
+    const out = await post("/api/push_to_sender", fd);
+
+    qs("acode").value = "loaded from dxf (" + out.lines + " lines)\n";
+    qs("loaded").textContent = "loaded lines: " + out.lines;
+
+    document.querySelector('.tab[data-tab="sender"]').click();
+  };
+
+  qs("dxf_download").onclick = () => {
+    qs("dxf_err").textContent = "";
+    if (!lastDxfId) {
+      qs("dxf_err").textContent = "generate first";
+      return;
+    }
+    window.location.href = "/download/" + lastDxfId + ".acode";
+  };
+
+  // Transport UI wiring
+  qs("transport").onchange = () => updateTransportUI();
+  qs("serial_refresh").onclick = () => refreshSerialPorts(true);
+  updateTransportUI();
+  refreshSerialPorts(false);
 </script>
 </body>
 </html>
