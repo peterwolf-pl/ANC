@@ -365,33 +365,28 @@ def lines_to_acode(
         """Axis-aligned move for 90-degree modes: Y first, then X."""
         nonlocal x, y, heading
 
-        dy = ny - y
-        if abs(dy) > 1e-9:
-            axis_y = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
-            dtheta = wrap_pi(axis_y - heading)
+        def emit_axis_leg(delta: float, axis_heading: float):
+            nonlocal heading
+            axis_heading = snap_axis_heading(axis_heading)
+            dtheta = wrap_pi(axis_heading - heading)
             if abs(dtheta) > 1e-9:
                 emit_turn_in_place(out, dtheta, feed_turn)
-            heading = axis_y
-            emit_straight(out, abs(dy), feed_lin)
+            heading = axis_heading
+            if abs(delta) > 1e-9:
+                emit_straight(out, delta, feed_lin)
+
+        dy = ny - y
+        if abs(dy) > 1e-9:
+            emit_axis_leg(dy, math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
             y = ny
 
         dx = nx - x
-        axis_x = snap_axis_heading(0.0 if dx >= 0 else math.pi)
-        dtheta = wrap_pi(axis_x - heading)
-        if abs(dtheta) > 1e-9:
-            emit_turn_in_place(out, dtheta, feed_turn)
-        heading = axis_x
-
         if abs(dx) > 1e-9:
-            emit_straight(out, abs(dx), feed_lin)
+            emit_axis_leg(dx, 0.0 if dx > 0 else math.pi)
             x = nx
-        elif abs(wrap_pi(preferred_heading - heading)) > 1e-9:
-            # snap heading to preferred row direction even if no X move is needed
-            axis_pref = snap_axis_heading(preferred_heading)
-            dtheta2 = wrap_pi(axis_pref - heading)
-            if abs(dtheta2) > 1e-9:
-                emit_turn_in_place(out, dtheta2, feed_turn)
-            heading = axis_pref
+
+        # Always end aligned with the preferred row heading, even if no X move is needed
+        emit_axis_leg(0.0, preferred_heading)
 
     def go_to_point_real90(nx: float, ny: float, target_heading: float):
         nonlocal x, y, heading
