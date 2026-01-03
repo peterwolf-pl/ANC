@@ -822,8 +822,18 @@
       return map.w / dx;
     }
 
+    function clampSimIdx() {
+      if (!sim.points || sim.points.length === 0) {
+        sim.idx = 0;
+        return false;
+      }
+      if (sim.idx >= sim.points.length) sim.idx = sim.points.length - 1;
+      if (sim.idx < 0) sim.idx = 0;
+      return true;
+    }
+
     function drawTrail(ctx, map) {
-      if (!sim.points || sim.points.length < 2) return;
+      if (!clampSimIdx() || sim.points.length < 2) return;
       ctx.save();
       const penDownWidth = 3 * map.dpr;
       const penUpWidth = 3 * map.dpr; // +2px vs previous
@@ -867,7 +877,7 @@
     }
 
     function drawSprite(ctx, map) {
-      if (!sim.points || sim.points.length === 0) return;
+      if (!clampSimIdx()) return;
 
       const p = sim.points[sim.idx];
       const q = worldToCanvas(p.x, p.y, map);
@@ -904,6 +914,11 @@
     function draw() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      if (!clampSimIdx()) {
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.clearRect(0,0,canvas.width, canvas.height);
+        return;
+      }
 
       ctx.setTransform(1,0,0,1,0,0);
       ctx.clearRect(0,0,canvas.width, canvas.height);
