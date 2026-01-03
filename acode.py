@@ -46,6 +46,8 @@ END_CMD = "END"
 # ----------------------------
 DEFAULT_FLAT_STEP_MM = 1.0
 DEFAULT_EPSILON_MM = 0.25
+DEFAULT_ARC_SEG_MM = 0.0
+DEFAULT_ARC_SEG_DEG = 0.0
 
 # ----------------------------
 # Helpers
@@ -351,6 +353,30 @@ def emit_arc_one_shot(out: List[str], radius: float, dtheta: float, feed_arc: in
     dr = (radius * dtheta) + (TURN_GAIN * (WHEELBASE_MM / 2.0) * dtheta)
     emit_w(out, steps_from_mm(dl), steps_from_mm(dr), feed_arc)
 
+def emit_arc_segmented(
+    out: List[str],
+    radius: float,
+    dtheta: float,
+    feed_arc: int,
+    arc_seg_mm: float,
+    arc_seg_deg: float,
+):
+    arc_len = abs(radius * dtheta)
+
+    n_mm = 1
+    if arc_seg_mm > 1e-9 and arc_len > 1e-9:
+        n_mm = max(1, int(math.ceil(arc_len / arc_seg_mm)))
+
+    n_deg = 1
+    if arc_seg_deg > 1e-9:
+        n_deg = max(1, int(math.ceil(abs(math.degrees(dtheta)) / arc_seg_deg)))
+
+    n = max(1, n_mm, n_deg)
+    step_theta = dtheta / n
+
+    for _ in range(n):
+        emit_arc_one_shot(out, radius, step_theta, feed_arc)
+
 def tangent_heading_for_arc(a0: float, dtheta: float) -> float:
     ccw = dtheta > 0
     return wrap_pi(a0 + (math.pi / 2.0 if ccw else -math.pi / 2.0))
@@ -360,6 +386,8 @@ def primitives_to_acode(
     feed_lin: int,
     feed_turn: int,
     feed_arc: int,
+    arc_seg_mm: float,
+    arc_seg_deg: float,
 ) -> List[str]:
     x = 0.0
     y = 0.0
@@ -411,7 +439,14 @@ def primitives_to_acode(
                 heading = wrap_pi(heading + dtheta_align)
 
             if abs(prim.dtheta) > 1e-9:
-                emit_arc_one_shot(out, prim.radius, prim.dtheta, feed_arc)
+                emit_arc_segmented(
+                    out,
+                    prim.radius,
+                    prim.dtheta,
+                    feed_arc,
+                    max(0.0, arc_seg_mm),
+                    max(0.0, arc_seg_deg),
+                )
 
             ex, ey = prim_end(prim)
             x, y = ex, ey
@@ -437,6 +472,8 @@ def main():
 
     ap.add_argument("--flat-step", type=float, default=DEFAULT_FLAT_STEP_MM)
     ap.add_argument("--epsilon", type=float, default=DEFAULT_EPSILON_MM)
+    ap.add_argument("--arc-seg-mm", type=float, default=DEFAULT_ARC_SEG_MM, help="maksymalna długość segmentu łuku")
+    ap.add_argument("--arc-seg-deg", type=float, default=DEFAULT_ARC_SEG_DEG, help="maksymalny kąt segmentu łuku")
     args = ap.parse_args()
 
     out_path = args.out or (os.path.splitext(args.dxf)[0] + ".acode")
@@ -455,6 +492,8 @@ def main():
         feed_lin=args.feed_lin,
         feed_turn=args.feed_turn,
         feed_arc=args.feed_arc,
+        arc_seg_mm=args.arc_seg_mm,
+        arc_seg_deg=args.arc_seg_deg,
     )
 
     with open(out_path, "w", encoding="utf-8") as f:

@@ -690,6 +690,91 @@ def generate_from_png(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "meta": meta,
     }
 
+def generate_from_dxf(dxf_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    err = _assert_tools_exist()
+    if err:
+        return {"ok": False, "error": err}
+
+    gen_id = str(uuid.uuid4())[:8]
+    out_acode = os.path.join(GEN_DIR, f"{gen_id}.acode")
+    out_preview = os.path.join(GEN_DIR, f"{gen_id}.preview.png")
+
+    cmd = [
+        "python3",
+        ACODE_PY_PATH,
+        dxf_path,
+        "-o",
+        out_acode,
+        "--feed-lin",
+        str(params["feed_lin"]),
+        "--feed-turn",
+        str(params["feed_turn"]),
+        "--feed-arc",
+        str(params["feed_arc"]),
+        "--flat-step",
+        str(params["flat_step"]),
+        "--epsilon",
+        str(params["epsilon"]),
+        "--arc-seg-mm",
+        str(params["arc_seg_mm"]),
+        "--arc-seg-deg",
+        str(params["arc_seg_deg"]),
+    ]
+
+    p1 = _run_cmd(cmd, cwd=HERE)
+    if p1.returncode != 0 or not os.path.isfile(out_acode):
+        msg = (p1.stderr or p1.stdout or "").strip() or "dxf convert failed"
+        return {"ok": False, "error": msg}
+
+    cmd2 = [
+        "python3",
+        ACODEVIZ_PATH,
+        out_acode,
+        "-o",
+        out_preview,
+        "--acode-py",
+        ACODE_PY_PATH,
+        "--dpi",
+        str(params["viz_dpi"]),
+        "--arc-step-mm",
+        str(params["viz_arc_step_mm"]),
+        "--arc-step-deg",
+        str(params["viz_arc_step_deg"]),
+    ]
+    if params.get("viz_equal"):
+        cmd2.append("--equal")
+    if params.get("viz_invert_y"):
+        cmd2.append("--invert-y")
+    if params.get("viz_home_resets_pose"):
+        cmd2.append("--home-resets-pose")
+
+    p2 = _run_cmd(cmd2, cwd=HERE)
+    if p2.returncode != 0 or not os.path.isfile(out_preview):
+        msg = (p2.stderr or p2.stdout or "").strip() or "preview failed"
+        return {"ok": False, "error": msg}
+
+    with open(out_acode, "r", encoding="utf-8", errors="ignore") as f:
+        acode_text = f.read()
+
+    meta = {
+        "gen_id": gen_id,
+        "params": params,
+        "acode_lines": len([ln for ln in acode_text.splitlines() if ln.strip()]),
+        "generator_stdout": (p1.stdout or "").strip(),
+        "generator_stderr": (p1.stderr or "").strip(),
+        "viz_stdout": (p2.stdout or "").strip(),
+        "viz_stderr": (p2.stderr or "").strip(),
+    }
+
+    return {
+        "ok": True,
+        "gen_id": gen_id,
+        "acode_path": out_acode,
+        "preview_path": out_preview,
+        "acode_text": acode_text,
+        "meta": meta,
+    }
+
 # ----------------------------
 # Routes
 # ----------------------------
@@ -1052,6 +1137,71 @@ def api_text_outline():
         "gen_id": result["gen_id"],
         "acode_lines": result["meta"]["acode_lines"],
         "warnings": result["meta"].get("warnings", []),
+    })
+
+# ----------------------------
+# Generator: DXF -> ACODE
+# ----------------------------
+@app.route("/api/dxf_to_acode", methods=["POST"])
+def api_dxf_to_acode():
+    if "dxf" not in request.files:
+        return jsonify({"ok": False, "error": "missing file field: dxf"}), 400
+
+    f = request.files["dxf"]
+    if not f.filename.lower().endswith(".dxf"):
+        return jsonify({"ok": False, "error": "only .dxf accepted"}), 400
+
+    gen_id_tmp = str(uuid.uuid4())[:8]
+    dxf_path = os.path.join(UPLOADS_DIR, f"{gen_id_tmp}.dxf")
+    f.save(dxf_path)
+
+    params = {
+        "feed_lin": _safe_int("feed_lin", 1200),
+        "feed_turn": _safe_int("feed_turn", 800),
+        "feed_arc": _safe_int("feed_arc", 800),
+        "flat_step": _safe_float("flat_step", 1.0),
+        "epsilon": _safe_float("epsilon", 0.25),
+        "arc_seg_mm": _safe_float("arc_seg_mm", 0.0),
+        "arc_seg_deg": _safe_float("arc_seg_deg", 0.0),
+        "viz_dpi": _safe_int("viz_dpi", 160),
+        "viz_arc_step_mm": _safe_float("viz_arc_step_mm", 1.0),
+        "viz_arc_step_deg": _safe_float("viz_arc_step_deg", 1.0),
+        "viz_equal": _safe_bool("viz_equal"),
+        "viz_invert_y": _safe_bool("viz_invert_y"),
+        "viz_home_resets_pose": _safe_bool("viz_home_resets_pose"),
+    }
+
+    result = generate_from_dxf(dxf_path, params)
+    if not result["ok"]:
+        with gen_lock:
+            gen_state.error = result["error"]
+        return jsonify({"ok": False, "error": result["error"]}), 500
+
+    machine = resolve_machine_settings(ACODE_PY_PATH)
+    with gen_lock:
+        gen_state.gen_id = result["gen_id"]
+        gen_state.png_path = ""
+        gen_state.acode_path = result["acode_path"]
+        gen_state.preview_path = result["preview_path"]
+        gen_state.acode_text = result["acode_text"]
+        gen_state.meta = result["meta"]
+        gen_state.error = ""
+        gen_state.viz_settings = {
+            "wheelbase_mm": machine["wheelbase_mm"],
+            "steps_per_mm": machine["steps_per_mm"],
+            "turn_gain": machine["turn_gain"],
+            "viz_arc_step_mm": params["viz_arc_step_mm"],
+            "viz_arc_step_deg": params["viz_arc_step_deg"],
+            "viz_home_resets_pose": params["viz_home_resets_pose"],
+            "viz_equal": params["viz_equal"],
+            "viz_invert_y": params["viz_invert_y"],
+        }
+
+    push_event("gen", {"msg": "dxf_generated", "gen_id": result["gen_id"], "lines": result["meta"]["acode_lines"]})
+    return jsonify({
+        "ok": True,
+        "gen_id": result["gen_id"],
+        "acode_lines": result["meta"]["acode_lines"],
     })
 
 # ----------------------------
