@@ -246,18 +246,22 @@ def build_scanline_paths_no_x_drift(
 
     return paths
 
-def lines_to_acode_soft_rows(
+def lines_to_acode(
     paths: List[List[PrimLine]],
     feed_lin: int,
     feed_turn: int,
     row_angle_deg: float,
     soft_min_dy_mm: float,
+    line_advance: str,
 ) -> List[str]:
-    if row_angle_deg <= 0 or row_angle_deg >= 90:
-        raise ValueError("row_angle_deg should be in (0, 90)")
+    soft_rows = (line_advance == "soft")
+    real_90_rows = (line_advance == "real90")
+    if soft_rows:
+        if row_angle_deg <= 0 or row_angle_deg >= 90:
+            raise ValueError("row_angle_deg should be in (0, 90)")
 
-    alpha = math.radians(row_angle_deg)
-    tan_a = math.tan(alpha)
+        alpha = math.radians(row_angle_deg)
+        tan_a = math.tan(alpha)
 
     x = 0.0
     y = 0.0
@@ -311,13 +315,106 @@ def lines_to_acode_soft_rows(
         go_to_point(wx, wy)
         go_to_point(nx, ny)
 
-    for path in paths:
-        set_pen(False)
-        go_to_point_soft_row(path[0].p0[0], path[0].p0[1])
+    def go_to_point_turn90(nx: float, ny: float):
+        nonlocal x, y, heading
 
-        set_pen(True)
-        for ln in path:
-            go_to_point(ln.p1[0], ln.p1[1])
+        dy = ny - y
+        if abs(dy) > 1e-9:
+            target_heading = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
+            dtheta = wrap_pi(target_heading - heading)
+            if abs(dtheta) > 1e-9:
+                emit_turn_in_place(out, dtheta, feed_turn)
+                heading = target_heading
+            heading = target_heading
+            emit_straight(out, abs(dy), feed_lin)
+            y = ny
+
+        dx = nx - x
+        if abs(dx) > 1e-9:
+            target_heading = snap_axis_heading(0.0 if dx > 0 else math.pi)
+            dtheta = wrap_pi(target_heading - heading)
+            if abs(dtheta) > 1e-9:
+                emit_turn_in_place(out, dtheta, feed_turn)
+                heading = target_heading
+            heading = target_heading
+            emit_straight(out, abs(dx), feed_lin)
+            x = nx
+
+    def snap_axis_heading(theta: float) -> float:
+        axes = [0.0, math.pi, math.pi / 2.0, -math.pi / 2.0]
+        return min(axes, key=lambda a: abs(wrap_pi(theta - a)))
+
+    def _smoketest_real90() -> None:
+        """Minimal sanity check for REAL 90 orthogonality."""
+        sample_paths = [
+            [PrimLine((0.0, 0.0), (20.0, 0.0))],
+            [PrimLine((20.0, 5.0), (0.0, 5.0))],
+            [PrimLine((0.0, 10.0), (20.0, 10.0))],
+        ]
+        ac = lines_to_acode(
+            paths=sample_paths,
+            feed_lin=1200,
+            feed_turn=800,
+            row_angle_deg=row_angle_deg,
+            soft_min_dy_mm=soft_min_dy_mm,
+            line_advance="real90",
+        )
+        print("\n".join(ac))
+
+    def axis_move_to(nx: float, ny: float, preferred_heading: float):
+        """Axis-aligned move for 90-degree modes: Y first, then X."""
+        nonlocal x, y, heading
+
+        dy = ny - y
+        if abs(dy) > 1e-9:
+            axis_y = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
+            dtheta = wrap_pi(axis_y - heading)
+            if abs(dtheta) > 1e-9:
+                emit_turn_in_place(out, dtheta, feed_turn)
+            heading = axis_y
+            emit_straight(out, abs(dy), feed_lin)
+            y = ny
+
+        dx = nx - x
+        axis_x = snap_axis_heading(0.0 if dx >= 0 else math.pi)
+        dtheta = wrap_pi(axis_x - heading)
+        if abs(dtheta) > 1e-9:
+            emit_turn_in_place(out, dtheta, feed_turn)
+        heading = axis_x
+
+        if abs(dx) > 1e-9:
+            emit_straight(out, abs(dx), feed_lin)
+            x = nx
+        elif abs(wrap_pi(preferred_heading - heading)) > 1e-9:
+            # snap heading to preferred row direction even if no X move is needed
+            axis_pref = snap_axis_heading(preferred_heading)
+            dtheta2 = wrap_pi(axis_pref - heading)
+            if abs(dtheta2) > 1e-9:
+                emit_turn_in_place(out, dtheta2, feed_turn)
+            heading = axis_pref
+
+    def go_to_point_real90(nx: float, ny: float, target_heading: float):
+        nonlocal x, y, heading
+
+        axis_move_to(nx, ny, target_heading)
+
+    for path in paths:
+        row_heading = 0.0
+        if path:
+            dx_row = path[0].p1[0] - path[0].p0[0]
+            row_heading = 0.0 if dx_row >= 0 else math.pi
+
+        set_pen(False)
+        if soft_rows:
+            go_to_point_soft_row(path[0].p0[0], path[0].p0[1])
+            set_pen(True)
+            for ln in path:
+                go_to_point(ln.p1[0], ln.p1[1])
+        else:
+            axis_move_to(path[0].p0[0], path[0].p0[1], row_heading)
+            set_pen(True)
+            for ln in path:
+                axis_move_to(ln.p1[0], ln.p1[1], row_heading)
 
     set_pen(False)
     out.append(END_CMD)
@@ -356,6 +453,8 @@ def main() -> int:
     ap.add_argument("--row-angle-deg", type=float, default=18.0, help="Max angle to X for row-advance legs (15-20)")
     ap.add_argument("--soft-min-dy-mm", type=float, default=0.3, help="Apply soft row-advance only if |dy| >= this value")
 
+    ap.add_argument("--line-advance", choices=["soft", "turn90", "real90"], default="soft", help="Row change mode")
+
     ap.add_argument("--feed-lin", type=int, default=1200)
     ap.add_argument("--feed-turn", type=int, default=800)
     args = ap.parse_args()
@@ -392,12 +491,13 @@ def main() -> int:
         scan=args.scan,
     )
 
-    acode = lines_to_acode_soft_rows(
+    acode = lines_to_acode(
         paths=paths,
         feed_lin=args.feed_lin,
         feed_turn=args.feed_turn,
         row_angle_deg=args.row_angle_deg,
         soft_min_dy_mm=args.soft_min_dy_mm,
+        line_advance=args.line_advance,
     )
 
     with open(out_path, "w", encoding="utf-8") as f:
