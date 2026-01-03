@@ -927,6 +927,27 @@ def api_start():
     with state_lock:
         if not state.lines:
             return jsonify({"ok": False, "error": "no ACODE loaded"}), 400
+        host = state.host
+        port = state.port
+        transport = state.transport
+        serial_port = state.serial_port
+        serial_baud = state.serial_baud
+
+    # Preflight connection to fail fast instead of waiting inside worker
+    try:
+        t = _open_transport(transport, host, port, serial_port, serial_baud)
+        _close_transport(t)
+    except Exception as e:
+        msg = f"connection failed: {e}"
+        with state_lock:
+            state.running = False
+            state.paused = False
+            state.stopping = False
+            state.error = msg
+        push_event("error", {"msg": msg})
+        return jsonify({"ok": False, "error": msg}), 502
+
+    with state_lock:
         state.running = True
         state.paused = False
         state.stopping = False
