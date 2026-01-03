@@ -255,7 +255,7 @@ def _safe_choice(name: str, default: str, allowed: Tuple[str, ...]) -> str:
     return v if v in allowed else default
 
 def _parse_line_advance(field: str) -> str:
-    v = _safe_choice(field, "soft", ("soft", "turn90", "default"))
+    v = _safe_choice(field, "soft", ("soft", "turn90", "real90", "default"))
     return "soft" if v == "default" else v
 
 def _assert_tools_exist() -> Optional[str]:

@@ -255,6 +255,7 @@ def lines_to_acode(
     line_advance: str,
 ) -> List[str]:
     soft_rows = (line_advance == "soft")
+    real_90_rows = (line_advance == "real90")
     if soft_rows:
         if row_angle_deg <= 0 or row_angle_deg >= 90:
             raise ValueError("row_angle_deg should be in (0, 90)")
@@ -337,10 +338,40 @@ def lines_to_acode(
             emit_straight(out, abs(dx), feed_lin)
             x = nx
 
+    def go_to_point_real90(nx: float, ny: float, target_heading: float):
+        nonlocal x, y, heading
+
+        dy = ny - y
+        if abs(dy) > 1e-9:
+            perp_heading = math.pi / 2.0 if dy > 0 else -math.pi / 2.0
+            dtheta1 = wrap_pi(perp_heading - heading)
+            if abs(dtheta1) > 1e-9:
+                emit_turn_in_place(out, dtheta1, feed_turn)
+                heading = wrap_pi(heading + dtheta1)
+            emit_straight(out, abs(dy), feed_lin)
+            y = ny
+
+        dtheta2 = wrap_pi(target_heading - heading)
+        if abs(dtheta2) > 1e-9:
+            emit_turn_in_place(out, dtheta2, feed_turn)
+            heading = wrap_pi(heading + dtheta2)
+
+        dx = nx - x
+        if abs(dx) > 1e-9:
+            emit_straight(out, abs(dx), feed_lin)
+            x = nx
+
     for path in paths:
+        row_heading = 0.0
+        if path:
+            dx_row = path[0].p1[0] - path[0].p0[0]
+            row_heading = 0.0 if dx_row >= 0 else math.pi
+
         set_pen(False)
         if soft_rows:
             go_to_point_soft_row(path[0].p0[0], path[0].p0[1])
+        elif real_90_rows:
+            go_to_point_real90(path[0].p0[0], path[0].p0[1], row_heading)
         else:
             go_to_point_turn90(path[0].p0[0], path[0].p0[1])
 
@@ -385,7 +416,7 @@ def main() -> int:
     ap.add_argument("--row-angle-deg", type=float, default=18.0, help="Max angle to X for row-advance legs (15-20)")
     ap.add_argument("--soft-min-dy-mm", type=float, default=0.3, help="Apply soft row-advance only if |dy| >= this value")
 
-    ap.add_argument("--line-advance", choices=["soft", "turn90"], default="soft", help="Row change mode")
+    ap.add_argument("--line-advance", choices=["soft", "turn90", "real90"], default="soft", help="Row change mode")
 
     ap.add_argument("--feed-lin", type=int, default=1200)
     ap.add_argument("--feed-turn", type=int, default=800)
