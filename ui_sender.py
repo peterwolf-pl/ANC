@@ -308,9 +308,10 @@ def _extract_number(text: str, names: List[str]) -> Optional[float]:
     return None
 
 def resolve_machine_settings(acode_py_path: str) -> Dict[str, float]:
-    wheelbase = 120.0
-    spmm = 9.142857
-    turn_gain = 1.0
+    # Fallbacks match acode.py defaults to keep simulator in sync even if file read fails
+    wheelbase = 255.0
+    spmm = (200 * 8) / 175.0  # 9.142857...
+    turn_gain = 7400.0 / ((wheelbase * math.pi) * spmm)
 
     try:
         with open(acode_py_path, "r", encoding="utf-8", errors="ignore") as f:
