@@ -137,6 +137,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="sender">Printer</button>
     <button class="tab" data-tab="generator">Generator PNG</button>
+    <button class="tab" data-tab="dxf">DXF</button>
     <button class="tab" data-tab="text">Text outline</button>
   </div>
 
@@ -522,6 +523,133 @@
     </div>
   </div>
 
+  <!-- DXF -->
+  <div class="panel" id="panel-dxf">
+    <div class="gen-vertical">
+      <div class="box">
+        <div class="row">
+          <input type="file" id="dxf" accept=".dxf" />
+          <button class="btn" id="dxf_gen">Generate</button>
+          <span class="pill" id="dxf_info">no output</span>
+          <span class="pill" id="dxf_duration">est: -</span>
+          <span class="err" id="dxf_err"></span>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="gen-settings-scroll">
+          <div class="setting-list">
+            <div class="setting-item">
+              <div class="label"><b>layer</b><span>Pusta = wszystkie</span></div>
+              <div class="control"><input id="dxf_layer" value="" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>reorder ścieżek</b><span>Najbliższy sąsiad (zalecane)</span></div>
+              <div class="control"><input type="checkbox" id="dxf_reorder" checked /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>feed_lin</b><span>Feed dla linii</span></div>
+              <div class="control"><input id="dxf_feed_lin" value="1200" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>feed_turn</b><span>Feed dla skrętów</span></div>
+              <div class="control"><input id="dxf_feed_turn" value="800" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>feed_arc</b><span>Feed dla łuków</span></div>
+              <div class="control"><input id="dxf_feed_arc" value="800" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>flat_step</b><span>Krok segmentacji łuku (mm)</span></div>
+              <div class="control"><input id="dxf_flat_step" value="1.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>epsilon</b><span>Simplify epsilon (mm)</span></div>
+              <div class="control"><input id="dxf_epsilon" value="0.25" /></div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_dpi</b><span>Podgląd: DPI</span></div>
+              <div class="control"><input id="dxf_viz_dpi" value="160" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
+              <div class="control"><input id="dxf_viz_arc_step_mm" value="1.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
+              <div class="control"><input id="dxf_viz_arc_step_deg" value="1.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
+              <div class="control"><input type="checkbox" id="dxf_viz_equal" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
+              <div class="control"><input type="checkbox" id="dxf_viz_invert_y" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_home_resets_pose</b><span>Podgląd: H resetuje pozycję</span></div>
+              <div class="control"><input type="checkbox" id="dxf_viz_home_resets_pose" /></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="row">
+          <button class="btn" id="dxf_push">Push to Sender</button>
+          <button class="btn" id="dxf_download">Download .acode</button>
+        </div>
+      </div>
+
+      <div class="preview-fullwidth">
+        <div class="box">
+          <div class="small">Preview + Symulator (maszyna.png)</div>
+
+          <div class="preview-area" style="margin-top:10px;">
+            <img id="dxf_previmg" alt="preview" />
+            <canvas id="simCanvasDxf" class="simCanvas"></canvas>
+          </div>
+
+          <div class="sim-controls">
+            <button class="btn" id="simPlayDxf">Play</button>
+            <button class="btn" id="simPauseDxf">Pause</button>
+            <button class="btn" id="simResetDxf">Reset</button>
+
+            <span class="pill">Speed</span>
+            <input id="simSpeedDxf" type="range" min="0.25" max="6" step="0.25" value="2">
+            <span class="pill mono" id="simSpeedValDxf">2.00x</span>
+
+            <span class="pill">Frame</span>
+            <input id="simScrubDxf" type="range" min="0" max="0" step="1" value="0">
+            <span class="pill mono" id="simPosDxf">0/0</span>
+
+            <span class="pill">Sprite scale</span>
+            <input id="simSpriteScaleDxf" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+            <span class="pill mono" id="simSpriteScaleValDxf">0.35</span>
+
+            <span class="pill">wheelbase</span>
+            <span class="pill mono" id="simWheelbaseDxf">-</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Text outline -->
   <div class="panel" id="panel-text">
     <div class="gen-vertical">
@@ -684,6 +812,7 @@
         resizeSim("gen");
         resizeSim("text");
         resizeSim("sender");
+        resizeSim("dxf");
       });
     };
   });
@@ -1217,6 +1346,15 @@
     "simSpriteScaleText", "simSpriteScaleValText"
   );
 
+  const simDxf = makeSim(
+    "dxf",
+    "dxf_previmg", "simCanvasDxf",
+    "simWheelbaseDxf", "simPosDxf", "simScrubDxf",
+    "simPlayDxf", "simPauseDxf", "simResetDxf",
+    "simSpeedDxf", "simSpeedValDxf",
+    "simSpriteScaleDxf", "simSpriteScaleValDxf"
+  );
+
   const simSender = makeSim(
     "sender",
     "senderPrev", "simCanvasSender",
@@ -1229,6 +1367,7 @@
   function resizeSim(which) {
     if (which === "gen") simGen.resize();
     if (which === "text") simText.resize();
+    if (which === "dxf") simDxf.resize();
     if (which === "sender") simSender.resize();
   }
 
@@ -1312,6 +1451,71 @@
       return;
     }
     window.location.href = "/download/" + lastGenId + ".acode";
+  };
+
+  // ----------------------------
+  // DXF
+  // ----------------------------
+  let lastDxfId = "";
+
+  async function generateDxf() {
+    qs("dxf_err").textContent = "";
+    const file = qs("dxf").files[0];
+    if (!file) throw new Error("select a DXF first");
+
+    const fd = new FormData();
+    fd.set("dxf", file);
+    fd.set("layer", qs("dxf_layer").value.trim());
+    if (!qs("dxf_reorder").checked) fd.set("no_reorder", "1");
+    fd.set("feed_lin", qs("dxf_feed_lin").value.trim());
+    fd.set("feed_turn", qs("dxf_feed_turn").value.trim());
+    fd.set("feed_arc", qs("dxf_feed_arc").value.trim());
+    fd.set("flat_step", qs("dxf_flat_step").value.trim());
+    fd.set("epsilon", qs("dxf_epsilon").value.trim());
+
+    fd.set("viz_dpi", qs("dxf_viz_dpi").value.trim());
+    fd.set("viz_arc_step_mm", qs("dxf_viz_arc_step_mm").value.trim());
+    fd.set("viz_arc_step_deg", qs("dxf_viz_arc_step_deg").value.trim());
+    if (qs("dxf_viz_equal").checked) fd.set("viz_equal", "1");
+    if (qs("dxf_viz_invert_y").checked) fd.set("viz_invert_y", "1");
+    if (qs("dxf_viz_home_resets_pose").checked) fd.set("viz_home_resets_pose", "1");
+
+    const out = await post("/api/dxf", fd);
+    lastDxfId = out.gen_id;
+
+    qs("dxf_info").textContent = "gen_id: " + out.gen_id + " lines: " + out.acode_lines;
+    qs("dxf_duration").textContent = "est: " + formatDuration(out.duration_s);
+
+    qs("dxf_previmg").src = "/preview/" + out.gen_id + ".png?ts=" + Date.now();
+    await simDxf.loadData(out.gen_id);
+  }
+
+  qs("dxf_gen").onclick = () => generateDxf().catch(e => qs("dxf_err").textContent = e.message);
+
+  qs("dxf_push").onclick = async () => {
+    qs("dxf_err").textContent = "";
+    if (!lastDxfId) {
+      qs("dxf_err").textContent = "generate first";
+      return;
+    }
+    const fd = new FormData();
+    fd.set("host", qs("host").value.trim());
+    fd.set("port", qs("port").value.trim());
+    const out = await post("/api/push_to_sender", fd);
+
+    qs("acode").value = "loaded from dxf (" + out.lines + " lines)\n";
+    qs("loaded").textContent = "loaded lines: " + out.lines;
+
+    document.querySelector('.tab[data-tab="sender"]').click();
+  };
+
+  qs("dxf_download").onclick = () => {
+    qs("dxf_err").textContent = "";
+    if (!lastDxfId) {
+      qs("dxf_err").textContent = "generate first";
+      return;
+    }
+    window.location.href = "/download/" + lastDxfId + ".acode";
   };
 
   // ----------------------------
