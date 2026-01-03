@@ -202,7 +202,8 @@ def build_scanline_paths_no_x_drift(
     margin_mm: float,
     flip_y: bool,
     height_mm: float,
-    scan: str,  # "serpentine" | "ltr"
+    scan: str,  # "serpentine" | "ltr" | "ltr+rtl"
+    y_order: str,  # "top-down" | "bottom-up"
 ) -> List[List[PrimLine]]:
     if not rows:
         return []
@@ -219,6 +220,10 @@ def build_scanline_paths_no_x_drift(
     ys = [ys[i] for i in order]
     segs_rows = [segs_rows[i] for i in order]
 
+    if y_order == "bottom-up":
+        ys.reverse()
+        segs_rows.reverse()
+
     x_lo = margin_mm
     x_hi = margin_mm + img_width_mm
 
@@ -229,6 +234,7 @@ def build_scanline_paths_no_x_drift(
         segs2.sort(key=lambda a: min(a[0], a[1]))
 
         serp = (scan == "serpentine")
+        bounce = (scan == "ltr+rtl")
         left_to_right = True if (not serp) else (i % 2 == 0)
 
         seg_iter = segs2 if left_to_right else list(reversed(segs2))
@@ -244,6 +250,12 @@ def build_scanline_paths_no_x_drift(
 
             paths.append([PrimLine((p0x, y_mm), (p1x, y_mm))])
 
+        if bounce:
+            for x1, x2 in reversed(segs2):
+                p0x = clamp(x2, x_lo, x_hi)
+                p1x = clamp(x1, x_lo, x_hi)
+                paths.append([PrimLine((p0x, y_mm), (p1x, y_mm))])
+
     return paths
 
 def lines_to_acode(
@@ -253,8 +265,12 @@ def lines_to_acode(
     row_angle_deg: float,
     soft_min_dy_mm: float,
     line_advance: str,
+    scan: str,
 ) -> List[str]:
-    soft_rows = (line_advance == "soft")
+    # Serpentine już zawiera optymalny kierunek końcowy/następny start,
+    # więc przejazdy „ukośne” między wierszami są niepożądane.
+    # W tym trybie erzac miękkiego przejścia zastępujemy osiowym ruchem (jak turn90).
+    soft_rows = (line_advance == "soft") and (scan != "serpentine")
     real_90_rows = (line_advance == "real90")
     if soft_rows:
         if row_angle_deg <= 0 or row_angle_deg >= 90:
@@ -358,6 +374,7 @@ def lines_to_acode(
             row_angle_deg=row_angle_deg,
             soft_min_dy_mm=soft_min_dy_mm,
             line_advance="real90",
+            scan="ltr",
         )
         print("\n".join(ac))
 
@@ -438,8 +455,9 @@ def main() -> int:
 
     ap.add_argument("--margin-mm", type=float, default=0.0, help="Offset everything by margin (mm)")
     ap.add_argument("--flip-y", action="store_true", help="Flip Y axis")
+    ap.add_argument("--y-order", choices=["top-down", "bottom-up"], default="top-down", help="Row traversal order")
 
-    ap.add_argument("--scan", choices=["serpentine", "ltr"], default="serpentine", help="Row direction strategy")
+    ap.add_argument("--scan", choices=["serpentine", "ltr", "ltr+rtl"], default="serpentine", help="Row direction strategy")
 
     # Antybanding
     ap.add_argument("--y-jitter-mm", type=float, default=0.04, help="Random Y offset per row. Use 0 to disable.")
@@ -489,7 +507,14 @@ def main() -> int:
         flip_y=args.flip_y,
         height_mm=height_mm,
         scan=args.scan,
+        y_order=args.y_order,
     )
+
+    # Jazda w dół->góra z miękkim przejściem potrafi przecinać istniejące linie.
+    # Wymuś osiowy przebieg między wierszami (turn90) w tym trybie, chyba że użytkownik wybierze coś innego.
+    line_advance_effective = args.line_advance
+    if args.y_order == "bottom-up" and args.line_advance == "soft":
+        line_advance_effective = "turn90"
 
     acode = lines_to_acode(
         paths=paths,
@@ -497,7 +522,8 @@ def main() -> int:
         feed_turn=args.feed_turn,
         row_angle_deg=args.row_angle_deg,
         soft_min_dy_mm=args.soft_min_dy_mm,
-        line_advance=args.line_advance,
+        line_advance=line_advance_effective,
+        scan=args.scan,
     )
 
     with open(out_path, "w", encoding="utf-8") as f:

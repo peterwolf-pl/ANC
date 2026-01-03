@@ -50,9 +50,14 @@
     .gen-settings-scroll { max-height: 380px; overflow: auto; padding-right: 6px; }
 
     .preview-fullwidth {
-      width: 100vw;
-      margin-left: calc(50% - 50vw);
-      margin-right: calc(50% - 50vw);
+      width: 100%;
+      display: flex;
+      justify-content: center;
+    }
+
+    .preview-fullwidth .box {
+      width: 100%;
+      max-width: 1200px;
     }
 
     .preview-area {
@@ -301,6 +306,17 @@
                 <select id="scan">
                   <option value="serpentine" selected>serpentine</option>
                   <option value="ltr">ltr</option>
+                  <option value="ltr+rtl">ltr+rtl</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>y_order</b><span>Kolejność wierszy (góra→dół / dół→góra)</span></div>
+              <div class="control">
+                <select id="y_order">
+                  <option value="top-down" selected>góra → dół</option>
+                  <option value="bottom-up">dół → góra</option>
                 </select>
               </div>
             </div>
@@ -491,6 +507,29 @@
               <div class="label"><b>font</b><span>Wybierz font</span></div>
               <div class="control">
                 <select id="t_font"></select>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="setting-item">
+              <div class="label"><b>scan</b><span>serpentine albo ltr</span></div>
+              <div class="control">
+                <select id="t_scan">
+                  <option value="serpentine" selected>serpentine</option>
+                  <option value="ltr">ltr</option>
+                  <option value="ltr+rtl">ltr+rtl</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>y_order</b><span>Kolejność wierszy (góra→dół / dół→góra)</span></div>
+              <div class="control">
+                <select id="t_y_order">
+                  <option value="top-down" selected>góra → dół</option>
+                  <option value="bottom-up">dół → góra</option>
+                </select>
               </div>
             </div>
 
@@ -783,8 +822,18 @@
       return map.w / dx;
     }
 
+    function clampSimIdx() {
+      if (!sim.points || sim.points.length === 0) {
+        sim.idx = 0;
+        return false;
+      }
+      if (sim.idx >= sim.points.length) sim.idx = sim.points.length - 1;
+      if (sim.idx < 0) sim.idx = 0;
+      return true;
+    }
+
     function drawTrail(ctx, map) {
-      if (!sim.points || sim.points.length < 2) return;
+      if (!clampSimIdx() || sim.points.length < 2) return;
       ctx.save();
       const penDownWidth = 3 * map.dpr;
       const penUpWidth = 3 * map.dpr; // +2px vs previous
@@ -828,7 +877,7 @@
     }
 
     function drawSprite(ctx, map) {
-      if (!sim.points || sim.points.length === 0) return;
+      if (!clampSimIdx()) return;
 
       const p = sim.points[sim.idx];
       const q = worldToCanvas(p.x, p.y, map);
@@ -865,6 +914,11 @@
     function draw() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      if (!clampSimIdx()) {
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.clearRect(0,0,canvas.width, canvas.height);
+        return;
+      }
 
       ctx.setTransform(1,0,0,1,0,0);
       ctx.clearRect(0,0,canvas.width, canvas.height);
@@ -1041,6 +1095,7 @@
     fd.set("y_jitter_mm", formVal("y_jitter_mm"));
     fd.set("seed", formVal("seed"));
     fd.set("scan", qs("scan").value);
+    fd.set("y_order", qs("y_order").value);
     fd.set("x_mode", qs("x_mode").value);
     fd.set("x_step_mm", formVal("x_step_mm"));
     fd.set("row_angle_deg", formVal("row_angle_deg"));
@@ -1150,7 +1205,8 @@
     fd.set("min_segment_mm", formVal("min_segment_mm"));
     fd.set("y_jitter_mm", formVal("y_jitter_mm"));
     fd.set("seed", formVal("seed"));
-    fd.set("scan", qs("scan").value);
+    fd.set("scan", qs("t_scan").value);
+    fd.set("y_order", qs("t_y_order").value);
     fd.set("x_mode", qs("x_mode").value);
     fd.set("x_step_mm", formVal("x_step_mm"));
     fd.set("row_angle_deg", formVal("row_angle_deg"));
