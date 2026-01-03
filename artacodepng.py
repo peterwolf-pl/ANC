@@ -367,9 +367,7 @@ def lines_to_acode(
 
         dy = ny - y
         if abs(dy) > 1e-9:
-            # enforce deterministic turn: when heading ~0 (row L->R) turn left (+90),
-            # when heading ~pi (row R->L) turn right (-90)
-            axis_y = snap_axis_heading(math.pi / 2.0 if abs(wrap_pi(heading)) < (math.pi / 2.0) else -math.pi / 2.0)
+            axis_y = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
             dtheta = wrap_pi(axis_y - heading)
             if abs(dtheta) > 1e-9:
                 emit_turn_in_place(out, dtheta, feed_turn)
@@ -377,16 +375,23 @@ def lines_to_acode(
             emit_straight(out, abs(dy), feed_lin)
             y = ny
 
-        axis_x = snap_axis_heading(preferred_heading if abs(preferred_heading - math.pi) < 1e-6 or abs(preferred_heading) < 1e-6 else (0.0 if nx >= x else math.pi))
+        dx = nx - x
+        axis_x = snap_axis_heading(0.0 if dx >= 0 else math.pi)
         dtheta = wrap_pi(axis_x - heading)
         if abs(dtheta) > 1e-9:
             emit_turn_in_place(out, dtheta, feed_turn)
         heading = axis_x
 
-        dx = nx - x
         if abs(dx) > 1e-9:
             emit_straight(out, abs(dx), feed_lin)
             x = nx
+        elif abs(wrap_pi(preferred_heading - heading)) > 1e-9:
+            # snap heading to preferred row direction even if no X move is needed
+            axis_pref = snap_axis_heading(preferred_heading)
+            dtheta2 = wrap_pi(axis_pref - heading)
+            if abs(dtheta2) > 1e-9:
+                emit_turn_in_place(out, dtheta2, feed_turn)
+            heading = axis_pref
 
     def go_to_point_real90(nx: float, ny: float, target_heading: float):
         nonlocal x, y, heading
