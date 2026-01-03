@@ -367,7 +367,9 @@ def lines_to_acode(
 
         dy = ny - y
         if abs(dy) > 1e-9:
-            axis_y = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
+            # enforce deterministic turn: when heading ~0 (row L->R) turn left (+90),
+            # when heading ~pi (row R->L) turn right (-90)
+            axis_y = snap_axis_heading(math.pi / 2.0 if abs(wrap_pi(heading)) < (math.pi / 2.0) else -math.pi / 2.0)
             dtheta = wrap_pi(axis_y - heading)
             if abs(dtheta) > 1e-9:
                 emit_turn_in_place(out, dtheta, feed_turn)
