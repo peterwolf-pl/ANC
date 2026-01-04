@@ -37,6 +37,14 @@
       align-items: flex-start;
     }
 
+    .panel-grid.tall {
+      align-items: stretch;
+    }
+
+    .panel-grid.tall .column {
+      min-height: 1000px;
+    }
+
     .column {
       display: flex;
       flex-direction: column;
@@ -157,7 +165,7 @@
         <div class="box">
           <div class="row">
             <label>Host: <input id="host" value="192.168.4.1"></label>
-            <label>Port: <input id="port" value="23" inputmode="numeric"></label>
+            <label>Port: <input id="port" value="3333" inputmode="numeric"></label>
             <label>Start line: <input id="start_line" value="1" inputmode="numeric" style="width:120px"></label>
             <button class="btn" id="load">Load</button>
             <span class="pill" id="loaded">not loaded</span>
@@ -309,7 +317,7 @@
 
   <!-- Generator PNG -->
   <div class="panel" id="panel-generator">
-    <div class="panel-grid">
+    <div class="panel-grid tall">
       <div class="column gen-vertical">
 
         <div class="box">
@@ -537,7 +545,7 @@
 
   <!-- DXF -->
   <div class="panel" id="panel-dxf">
-    <div class="panel-grid">
+    <div class="panel-grid tall">
       <div class="column gen-vertical">
         <div class="box">
           <div class="row">
@@ -668,7 +676,7 @@
 
   <!-- Text outline -->
   <div class="panel" id="panel-text">
-    <div class="panel-grid">
+    <div class="panel-grid tall">
 
       <div class="column gen-vertical">
 
