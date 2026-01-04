@@ -78,6 +78,11 @@
       background: #fafafa;
     }
 
+    .preview-area.small {
+      height: 420px;
+      min-height: 320px;
+    }
+
     /* Simulator canvas on top of preview image */
     .simCanvas {
       position: absolute;
@@ -132,6 +137,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="sender">Printer</button>
     <button class="tab" data-tab="generator">Generator PNG</button>
+    <button class="tab" data-tab="dxf">DXF</button>
     <button class="tab" data-tab="text">Text outline</button>
   </div>
 
@@ -141,6 +147,7 @@
       <div class="row">
         <label>Host: <input id="host" value="192.168.4.1"></label>
         <label>Port: <input id="port" value="23" inputmode="numeric"></label>
+        <label>Start line: <input id="start_line" value="1" inputmode="numeric" style="width:120px"></label>
         <button class="btn" id="load">Load</button>
         <span class="pill" id="loaded">not loaded</span>
       </div>
@@ -161,7 +168,8 @@
     <div class="box">
       <div class="row">
         <div class="pill">Progress: <span id="progress" class="mono">0/0</span></div>
-        <div class="pill">Last: <span id="lastok" class="mono">-</span></div>
+        <div class="pill">Last OK line #: <span id="lastok" class="mono">-</span></div>
+        <div class="pill">Est. czas: <span id="senderDuration" class="mono">-</span></div>
       </div>
 
       <div style="height:10px"></div>
@@ -169,7 +177,66 @@
       <div class="mono" style="font-size:16px;">
         <div class="small">Aktualna linia</div>
         <div id="current" style="padding:10px; border:1px solid #eee; border-radius:10px; min-height:44px;"></div>
+        <div class="small" style="margin-top:10px;">Ostatnia linia OK</div>
+        <div id="lastokline" style="padding:10px; border:1px solid #eee; border-radius:10px; min-height:44px;"></div>
         <div id="error" class="err" style="margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <div style="height:12px"></div>
+
+    <div class="box">
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <div style="font-weight:700;">Serial (ręcznie)</div>
+          <div class="small">Wyślij pojedynczą linię ACODE "z palca". Działa gdy druk jest zatrzymany lub zapauzowany.</div>
+        </div>
+        <span class="pill">manual TX</span>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="row" style="align-items: center;">
+        <input id="manual_line" placeholder="np. W L400 R400 F1200" style="flex:1; min-width:260px;">
+        <button class="btn" id="manual_send">Wyślij</button>
+        <div class="err" id="serialerr"></div>
+      </div>
+    </div>
+
+    <div style="height:12px"></div>
+
+    <div class="box">
+      <div style="font-weight:700;">Symulator (druk)</div>
+      <div class="small">Podgląd ścieżki zsynchronizowany z aktualnie wykonywaną linią.</div>
+
+      <div class="preview-area small" style="margin-top:10px;">
+        <img id="senderPrev" alt="preview sender" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=" />
+        <canvas id="simCanvasSender" class="simCanvas"></canvas>
+      </div>
+
+      <div class="sim-controls">
+        <button class="btn" id="simPlaySender">Play</button>
+        <button class="btn" id="simPauseSender">Pause</button>
+        <button class="btn" id="simResetSender">Reset</button>
+
+        <span class="pill">Speed</span>
+        <input id="simSpeedSender" type="range" min="0.25" max="6" step="0.25" value="2">
+        <span class="pill mono" id="simSpeedValSender">2.00x</span>
+
+        <span class="pill">Frame</span>
+        <input id="simScrubSender" type="range" min="0" max="0" step="1" value="0">
+        <span class="pill mono" id="simPosSender">0/0</span>
+
+        <span class="pill">Sprite scale</span>
+        <input id="simSpriteScaleSender" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+        <span class="pill mono" id="simSpriteScaleValSender">0.35</span>
+
+        <span class="pill">wheelbase</span>
+        <span class="pill mono" id="simWheelbaseSender">-</span>
+      </div>
+
+      <div class="small">
+        Estymowany czas pracy: <span class="mono" id="simDurationSender">-</span>. Scrubber śledzi postęp drukowania w czasie rzeczywistym.
       </div>
     </div>
 
@@ -241,6 +308,7 @@
           <input type="file" id="png" accept="image/png" />
           <button class="btn" id="gen">Generate</button>
           <span class="pill" id="geninfo">no output</span>
+          <span class="pill" id="genduration">est: -</span>
           <span class="err" id="generr"></span>
         </div>
 
@@ -455,6 +523,133 @@
     </div>
   </div>
 
+  <!-- DXF -->
+  <div class="panel" id="panel-dxf">
+    <div class="gen-vertical">
+      <div class="box">
+        <div class="row">
+          <input type="file" id="dxf" accept=".dxf" />
+          <button class="btn" id="dxf_gen">Generate</button>
+          <span class="pill" id="dxf_info">no output</span>
+          <span class="pill" id="dxf_duration">est: -</span>
+          <span class="err" id="dxf_err"></span>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="gen-settings-scroll">
+          <div class="setting-list">
+            <div class="setting-item">
+              <div class="label"><b>layer</b><span>Pusta = wszystkie</span></div>
+              <div class="control"><input id="dxf_layer" value="" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>reorder ścieżek</b><span>Najbliższy sąsiad (zalecane)</span></div>
+              <div class="control"><input type="checkbox" id="dxf_reorder" checked /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>feed_lin</b><span>Feed dla linii</span></div>
+              <div class="control"><input id="dxf_feed_lin" value="1200" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>feed_turn</b><span>Feed dla skrętów</span></div>
+              <div class="control"><input id="dxf_feed_turn" value="800" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>feed_arc</b><span>Feed dla łuków</span></div>
+              <div class="control"><input id="dxf_feed_arc" value="800" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>flat_step</b><span>Krok segmentacji łuku (mm)</span></div>
+              <div class="control"><input id="dxf_flat_step" value="1.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>epsilon</b><span>Simplify epsilon (mm)</span></div>
+              <div class="control"><input id="dxf_epsilon" value="0.25" /></div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_dpi</b><span>Podgląd: DPI</span></div>
+              <div class="control"><input id="dxf_viz_dpi" value="160" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
+              <div class="control"><input id="dxf_viz_arc_step_mm" value="1.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
+              <div class="control"><input id="dxf_viz_arc_step_deg" value="1.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
+              <div class="control"><input type="checkbox" id="dxf_viz_equal" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
+              <div class="control"><input type="checkbox" id="dxf_viz_invert_y" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>viz_home_resets_pose</b><span>Podgląd: H resetuje pozycję</span></div>
+              <div class="control"><input type="checkbox" id="dxf_viz_home_resets_pose" /></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="row">
+          <button class="btn" id="dxf_push">Push to Sender</button>
+          <button class="btn" id="dxf_download">Download .acode</button>
+        </div>
+      </div>
+
+      <div class="preview-fullwidth">
+        <div class="box">
+          <div class="small">Preview + Symulator (maszyna.png)</div>
+
+          <div class="preview-area" style="margin-top:10px;">
+            <img id="dxf_previmg" alt="preview" />
+            <canvas id="simCanvasDxf" class="simCanvas"></canvas>
+          </div>
+
+          <div class="sim-controls">
+            <button class="btn" id="simPlayDxf">Play</button>
+            <button class="btn" id="simPauseDxf">Pause</button>
+            <button class="btn" id="simResetDxf">Reset</button>
+
+            <span class="pill">Speed</span>
+            <input id="simSpeedDxf" type="range" min="0.25" max="6" step="0.25" value="2">
+            <span class="pill mono" id="simSpeedValDxf">2.00x</span>
+
+            <span class="pill">Frame</span>
+            <input id="simScrubDxf" type="range" min="0" max="0" step="1" value="0">
+            <span class="pill mono" id="simPosDxf">0/0</span>
+
+            <span class="pill">Sprite scale</span>
+            <input id="simSpriteScaleDxf" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+            <span class="pill mono" id="simSpriteScaleValDxf">0.35</span>
+
+            <span class="pill">wheelbase</span>
+            <span class="pill mono" id="simWheelbaseDxf">-</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Text outline -->
   <div class="panel" id="panel-text">
     <div class="gen-vertical">
@@ -464,6 +659,7 @@
           <input id="t_text" placeholder="Wpisz tekst" style="flex:1; min-width: 240px;" />
           <button class="btn" id="t_gen">Generate</button>
           <span class="pill" id="t_info">no output</span>
+          <span class="pill" id="t_duration">est: -</span>
           <span class="err" id="t_err"></span>
         </div>
 
@@ -615,6 +811,8 @@
       requestAnimationFrame(() => {
         resizeSim("gen");
         resizeSim("text");
+        resizeSim("sender");
+        resizeSim("dxf");
       });
     };
   });
@@ -642,19 +840,36 @@
     return json;
   }
 
+  function formatDuration(sec) {
+    if (!isFinite(sec) || sec <= 0) return "-";
+    const total = Math.round(sec);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`;
+    if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+    return `${s}s`;
+  }
+
   // Sender
   async function loadAcode() {
     const fd = new FormData();
     fd.set("host", qs("host").value.trim());
     fd.set("port", qs("port").value.trim());
     fd.set("acode", qs("acode").value);
+    fd.set("start_line", qs("start_line").value.trim());
 
     const out = await post("/api/load", fd);
     qs("loaded").textContent = "loaded lines: " + out.lines;
     qs("error").textContent = "";
     qs("current").textContent = "";
     qs("lastok").textContent = "-";
-    qs("progress").textContent = "0/" + out.lines;
+    qs("lastokline").textContent = "";
+    qs("progress").textContent = Math.max(0, (out.start_line || 1) - 1) + "/" + out.lines;
+    senderTotalLines = out.lines || 0;
+    qs("start_line").value = String(out.start_line || 1);
+    qs("senderDuration").textContent = formatDuration(out.duration_s);
+    await refreshSenderViz();
   }
 
   qs("load").onclick = () => loadAcode().catch(e => qs("error").textContent = e.message);
@@ -662,6 +877,12 @@
   qs("pause").onclick = () => post("/api/pause", new FormData()).catch(e => qs("error").textContent = e.message);
   qs("resume").onclick = () => post("/api/resume", new FormData()).catch(e => qs("error").textContent = e.message);
   qs("stop").onclick = () => post("/api/stop", new FormData()).catch(e => qs("error").textContent = e.message);
+  qs("manual_send").onclick = () => sendManualLine().catch(e => qs("serialerr").textContent = e.message);
+
+  const syncSenderLine = (lineNo) => {
+    if (!lineNo) return;
+    simSender.setLineIdx(lineNo);
+  };
 
   // SSE
   const ev = new EventSource("/events");
@@ -673,20 +894,68 @@
       if (kind === "line") {
         qs("current").textContent = payload.line;
         qs("error").textContent = "";
-        qs("lastok").textContent = "";
+        qs("lastokline").textContent = "";
+        if (payload.total) senderTotalLines = payload.total;
         if (payload.total && payload.idx) qs("progress").textContent = payload.idx + "/" + payload.total;
+        if (payload.idx) {
+          qs("start_line").value = String(Math.max(1, payload.idx));
+          syncSenderLine(payload.idx);
+        }
       }
-      if (kind === "ok") qs("lastok").textContent = "OK";
+      if (kind === "ok") {
+        if (payload.idx) {
+          qs("lastok").textContent = payload.idx;
+          const nextStart = payload.idx + 1;
+          const capped = senderTotalLines ? Math.min(senderTotalLines, nextStart) : nextStart;
+          qs("start_line").value = String(Math.max(1, capped));
+          syncSenderLine(payload.idx);
+        } else {
+          qs("lastok").textContent = "OK";
+        }
+        if (payload.line) qs("lastokline").textContent = payload.line;
+      }
       if (kind === "error") qs("error").textContent = payload.msg;
       return;
     }
 
     const total = data.total ?? 0;
     const idx = data.idx ?? 0;
+    senderTotalLines = total;
     qs("progress").textContent = idx + "/" + total;
     if (data.error) qs("error").textContent = data.error;
     qs("runstate").textContent = data.paused ? "paused" : (data.running ? "running" : "idle");
+    if (data.last_sent) qs("current").textContent = data.last_sent;
+    if (data.last_ok_idx) qs("lastok").textContent = data.last_ok_idx;
+    if (data.last_ok_line) qs("lastokline").textContent = data.last_ok_line;
+    if (idx) {
+      const nextStart = idx + 1;
+      qs("start_line").value = String(Math.max(1, Math.min(total || nextStart, nextStart)));
+      syncSenderLine(idx);
+    }
   };
+
+  async function refreshSenderViz() {
+    const fd = new FormData();
+    fd.set("acode", qs("acode").value);
+    const out = await post("/api/sender_vizdata", fd);
+    senderTotalLines = out.total_lines || 0;
+    qs("simDurationSender").textContent = formatDuration(out.duration_s);
+    qs("senderDuration").textContent = formatDuration(out.duration_s);
+    qs("progress").textContent = (Math.max(1, parseInt(qs("start_line").value || "1", 10)) - 1) + "/" + senderTotalLines;
+    await simSender.loadData(out);
+  }
+
+  async function sendManualLine() {
+    qs("serialerr").textContent = "";
+    const fd = new FormData();
+    fd.set("host", qs("host").value.trim());
+    fd.set("port", qs("port").value.trim());
+    fd.set("line", qs("manual_line").value.trim());
+    const out = await post("/api/serial_send", fd);
+    if (out && out.line) {
+      qs("current").textContent = out.line;
+    }
+  }
 
   // Jog helpers
   async function jog(dir) {
@@ -763,7 +1032,9 @@
       spriteSrcH: 500,
       headingOffsetRad: -Math.PI / 2,
       spriteScale: 0.35,
-      maxSpriteFrac: 0.30
+      maxSpriteFrac: 0.30,
+      lineFrames: [],
+      totalLines: 0
     };
 
     const canvas = qs(canvasId);
@@ -984,18 +1255,18 @@
       draw();
     }
 
-    async function loadData(genId) {
-      const resp = await fetch("/api/vizdata/" + genId);
-      const ct = (resp.headers.get("content-type") || "").toLowerCase();
-      const text = await resp.text();
-      if (!ct.includes("application/json")) throw new Error("vizdata non-JSON: " + text.slice(0, 200));
-      const data = JSON.parse(text);
+    async function loadData(genIdOrData) {
+      const data = (typeof genIdOrData === "string") ? await getJson("/api/vizdata/" + genIdOrData) : genIdOrData;
 
       sim.points = data.points || [];
       sim.bounds = data.bounds || null;
       sim.wheelbase_mm = (data.settings && data.settings.wheelbase_mm) ? data.settings.wheelbase_mm : 120;
       sim.equal = (data.viz && data.viz.equal) ? true : false;
       sim.invert_y = (data.viz && data.viz.invert_y) ? true : false;
+      sim.lineFrames = Array.isArray(data.line_frames) ? data.line_frames : [];
+      sim.totalLines = data.total_lines || sim.lineFrames.length || 0;
+      sim.idx = 0;
+      sim.lastT = 0;
 
       qs(wheelbaseId).textContent = String(sim.wheelbase_mm.toFixed(2)) + " mm";
 
@@ -1017,6 +1288,15 @@
 
       resize();
       reset();
+    }
+
+    function setLineIdx(lineNumber) {
+      if (!sim.lineFrames || sim.lineFrames.length === 0) return;
+      const clamped = Math.max(1, Math.min(lineNumber, sim.lineFrames.length));
+      const frame = sim.lineFrames[clamped - 1];
+      const maxIdx = Math.max(0, sim.points.length - 1);
+      sim.idx = Math.max(0, Math.min(frame, maxIdx));
+      draw();
     }
 
     // wiring
@@ -1045,7 +1325,7 @@
     img.onload = () => { resize(); draw(); };
     window.addEventListener("resize", () => resize());
 
-    return { loadData, resize, reset };
+    return { loadData, resize, reset, setLineIdx };
   }
 
   const simGen = makeSim(
@@ -1066,10 +1346,32 @@
     "simSpriteScaleText", "simSpriteScaleValText"
   );
 
+  const simDxf = makeSim(
+    "dxf",
+    "dxf_previmg", "simCanvasDxf",
+    "simWheelbaseDxf", "simPosDxf", "simScrubDxf",
+    "simPlayDxf", "simPauseDxf", "simResetDxf",
+    "simSpeedDxf", "simSpeedValDxf",
+    "simSpriteScaleDxf", "simSpriteScaleValDxf"
+  );
+
+  const simSender = makeSim(
+    "sender",
+    "senderPrev", "simCanvasSender",
+    "simWheelbaseSender", "simPosSender", "simScrubSender",
+    "simPlaySender", "simPauseSender", "simResetSender",
+    "simSpeedSender", "simSpeedValSender",
+    "simSpriteScaleSender", "simSpriteScaleValSender"
+  );
+
   function resizeSim(which) {
     if (which === "gen") simGen.resize();
     if (which === "text") simText.resize();
+    if (which === "dxf") simDxf.resize();
+    if (which === "sender") simSender.resize();
   }
+
+  let senderTotalLines = 0;
 
   // ----------------------------
   // Generator PNG
@@ -1120,6 +1422,7 @@
     if (out.warnings && out.warnings.length) {
       qs("geninfo").textContent += " warnings: " + out.warnings.join("; ");
     }
+    qs("genduration").textContent = "est: " + formatDuration(out.duration_s);
 
     qs("previmg").src = "/preview/" + out.gen_id + ".png?ts=" + Date.now();
     await simGen.loadData(out.gen_id);
@@ -1148,6 +1451,71 @@
       return;
     }
     window.location.href = "/download/" + lastGenId + ".acode";
+  };
+
+  // ----------------------------
+  // DXF
+  // ----------------------------
+  let lastDxfId = "";
+
+  async function generateDxf() {
+    qs("dxf_err").textContent = "";
+    const file = qs("dxf").files[0];
+    if (!file) throw new Error("select a DXF first");
+
+    const fd = new FormData();
+    fd.set("dxf", file);
+    fd.set("layer", qs("dxf_layer").value.trim());
+    if (!qs("dxf_reorder").checked) fd.set("no_reorder", "1");
+    fd.set("feed_lin", qs("dxf_feed_lin").value.trim());
+    fd.set("feed_turn", qs("dxf_feed_turn").value.trim());
+    fd.set("feed_arc", qs("dxf_feed_arc").value.trim());
+    fd.set("flat_step", qs("dxf_flat_step").value.trim());
+    fd.set("epsilon", qs("dxf_epsilon").value.trim());
+
+    fd.set("viz_dpi", qs("dxf_viz_dpi").value.trim());
+    fd.set("viz_arc_step_mm", qs("dxf_viz_arc_step_mm").value.trim());
+    fd.set("viz_arc_step_deg", qs("dxf_viz_arc_step_deg").value.trim());
+    if (qs("dxf_viz_equal").checked) fd.set("viz_equal", "1");
+    if (qs("dxf_viz_invert_y").checked) fd.set("viz_invert_y", "1");
+    if (qs("dxf_viz_home_resets_pose").checked) fd.set("viz_home_resets_pose", "1");
+
+    const out = await post("/api/dxf", fd);
+    lastDxfId = out.gen_id;
+
+    qs("dxf_info").textContent = "gen_id: " + out.gen_id + " lines: " + out.acode_lines;
+    qs("dxf_duration").textContent = "est: " + formatDuration(out.duration_s);
+
+    qs("dxf_previmg").src = "/preview/" + out.gen_id + ".png?ts=" + Date.now();
+    await simDxf.loadData(out.gen_id);
+  }
+
+  qs("dxf_gen").onclick = () => generateDxf().catch(e => qs("dxf_err").textContent = e.message);
+
+  qs("dxf_push").onclick = async () => {
+    qs("dxf_err").textContent = "";
+    if (!lastDxfId) {
+      qs("dxf_err").textContent = "generate first";
+      return;
+    }
+    const fd = new FormData();
+    fd.set("host", qs("host").value.trim());
+    fd.set("port", qs("port").value.trim());
+    const out = await post("/api/push_to_sender", fd);
+
+    qs("acode").value = "loaded from dxf (" + out.lines + " lines)\n";
+    qs("loaded").textContent = "loaded lines: " + out.lines;
+
+    document.querySelector('.tab[data-tab="sender"]').click();
+  };
+
+  qs("dxf_download").onclick = () => {
+    qs("dxf_err").textContent = "";
+    if (!lastDxfId) {
+      qs("dxf_err").textContent = "generate first";
+      return;
+    }
+    window.location.href = "/download/" + lastDxfId + ".acode";
   };
 
   // ----------------------------
@@ -1230,6 +1598,7 @@
     if (out.warnings && out.warnings.length) {
       qs("t_info").textContent += " warnings: " + out.warnings.join("; ");
     }
+    qs("t_duration").textContent = "est: " + formatDuration(out.duration_s);
 
     qs("t_previmg").src = "/preview/" + out.gen_id + ".png?ts=" + Date.now();
     await simText.loadData(out.gen_id);
