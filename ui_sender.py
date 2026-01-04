@@ -59,6 +59,98 @@ def push_event(kind: str, payload: dict):
         except queue.Full:
             pass
 
+W_RE = re.compile(r"^W\s+L(-?\d+)\s+R(-?\d+)\s+F(\d+)\s*$")
+P_RE = re.compile(r"^P\s+([UD])\s*$")
+
+ESTIMATE_DEFAULTS = {
+    "feed_to_sps": 0.6,
+    "min_sps": 50.0,
+    "max_sps": 2500.0,
+    "servo_settle_s": 0.18,
+    "start_sps": 120.0,
+    "accel_sps2": 8000.0,
+}
+
+def estimate_motion_seconds(
+    line: str,
+    feed_to_sps: float,
+    min_sps: float,
+    max_sps: float,
+    servo_settle_s: float,
+    start_sps: float,
+    accel_sps2: float,
+) -> float:
+    if line == "H":
+        return 0.25
+    if line == "END":
+        return 0.25
+    if line.startswith("E"):
+        return 0.25
+
+    if P_RE.match(line):
+        return servo_settle_s + 0.25
+
+    m = W_RE.match(line)
+    if not m:
+        return 0.6
+
+    l = abs(int(m.group(1)))
+    r = abs(int(m.group(2)))
+    f = int(m.group(3))
+    steps = max(l, r)
+    if steps <= 0:
+        return 0.25
+
+    v_target = f * feed_to_sps
+    if v_target < min_sps:
+        v_target = min_sps
+    if v_target > max_sps:
+        v_target = max_sps
+
+    v0 = start_sps
+    if v0 < min_sps:
+        v0 = min_sps
+    if v0 > v_target:
+        v0 = v_target
+
+    a = accel_sps2
+    if a < 1.0:
+        a = 1.0
+
+    ramp_steps = (v_target * v_target - v0 * v0) / (2.0 * a)
+    if ramp_steps < 0.0:
+        ramp_steps = 0.0
+
+    half = steps / 2.0
+    if ramp_steps > half:
+        ramp_steps = half
+
+    t_ramp = (v_target - v0) / a
+    if t_ramp < 0.0:
+        t_ramp = 0.0
+
+    cruise_steps = steps - 2.0 * ramp_steps
+    if cruise_steps < 0.0:
+        cruise_steps = 0.0
+
+    t_cruise = cruise_steps / v_target if v_target > 1e-9 else 9999.0
+
+    return (2.0 * t_ramp) + t_cruise + 0.30
+
+def estimate_total_duration(lines: List[str], params: Dict[str, float]) -> float:
+    total = 0.0
+    for ln in lines:
+        total += estimate_motion_seconds(
+            line=ln,
+            feed_to_sps=params.get("feed_to_sps", ESTIMATE_DEFAULTS["feed_to_sps"]),
+            min_sps=params.get("min_sps", ESTIMATE_DEFAULTS["min_sps"]),
+            max_sps=params.get("max_sps", ESTIMATE_DEFAULTS["max_sps"]),
+            servo_settle_s=params.get("servo_settle_s", ESTIMATE_DEFAULTS["servo_settle_s"]),
+            start_sps=params.get("start_sps", ESTIMATE_DEFAULTS["start_sps"]),
+            accel_sps2=params.get("accel_sps2", ESTIMATE_DEFAULTS["accel_sps2"]),
+        )
+    return total
+
 @dataclass
 class JobState:
     running: bool = False
@@ -70,6 +162,8 @@ class JobState:
     idx: int = 0
     last_sent: str = ""
     last_ok: bool = False
+    last_ok_idx: int = 0
+    last_ok_line: str = ""
     error: str = ""
 
 state = JobState()
@@ -148,7 +242,6 @@ def sender_worker():
         host = state.host
         port = state.port
         lines = state.lines or []
-        state.idx = 0
         state.last_sent = ""
         state.last_ok = False
         state.error = ""
@@ -207,6 +300,9 @@ def sender_worker():
             ok = wait_ok(sock, LINE_ACK_TIMEOUT_S)
             with state_lock:
                 state.last_ok = ok
+                if ok:
+                    state.last_ok_idx = idx + 1
+                    state.last_ok_line = line
 
             if not ok:
                 with state_lock:
@@ -215,7 +311,7 @@ def sender_worker():
                 push_event("error", {"msg": state.error})
                 break
 
-            push_event("ok", {"idx": idx + 1})
+            push_event("ok", {"idx": idx + 1, "line": line})
             with state_lock:
                 state.idx += 1
 
@@ -246,8 +342,11 @@ def _safe_int(name: str, default: int) -> int:
     except ValueError:
         return default
 
-def _safe_bool(name: str) -> bool:
-    v = (request.form.get(name, "").strip() or "").lower()
+def _safe_bool(name: str, default: bool = False) -> bool:
+    raw = request.form.get(name, "")
+    if raw is None or raw == "":
+        return default
+    v = (raw.strip() or "").lower()
     return v in ("1", "true", "yes", "on", "checked")
 
 def _safe_choice(name: str, default: str, allowed: Tuple[str, ...]) -> str:
@@ -295,6 +394,9 @@ def _supports_arg(script_path: str, arg: str) -> bool:
             return arg in f.read()
     except OSError:
         return False
+
+def _split_acode_lines(text: str) -> List[str]:
+    return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
 # ----------------------------
 # Settings parsing without importing acode.py
@@ -381,6 +483,7 @@ def acode_to_trajectory(
     th = 0.0
     pen_down = True
     pts: List[Dict[str, float]] = [{"x": x, "y": y, "theta": th, "pen_down": pen_down}]
+    line_frames: List[int] = []
 
     xmin = xmax = x
     ymin = ymax = y
@@ -393,6 +496,9 @@ def acode_to_trajectory(
         ymin = min(ymin, py)
         ymax = max(ymax, py)
 
+    def mark_line():
+        line_frames.append(max(0, len(pts) - 1))
+
     arc_step_rad = max(1e-6, (arc_step_deg * math.pi / 180.0))
     arc_step_mm = max(1e-6, arc_step_mm)
 
@@ -404,20 +510,24 @@ def acode_to_trajectory(
         if s == "H" and home_resets_pose:
             x, y, th = 0.0, 0.0, 0.0
             add_pt(x, y, th, pen_down)
+            mark_line()
             continue
 
         if s.startswith("W"):
             ml = re.search(r"\bL\s*(" + _NUM_RE + r")\b", s)
             mr = re.search(r"\bR\s*(" + _NUM_RE + r")\b", s)
             if not ml or not mr:
+                mark_line()
                 continue
             try:
                 L = float(ml.group(1))
                 R = float(mr.group(1))
             except ValueError:
+                mark_line()
                 continue
 
             if steps_per_mm <= 1e-9:
+                mark_line()
                 continue
 
             dl = L / steps_per_mm
@@ -439,6 +549,7 @@ def acode_to_trajectory(
                 x, y, th = _integrate_step(x, y, th, dl_i, dr_i, wheelbase_mm, turn_gain)
                 add_pt(x, y, th, pen_down)
 
+            mark_line()
             continue
 
         if s.startswith("P"):
@@ -447,7 +558,10 @@ def acode_to_trajectory(
             elif "D" in s.upper():
                 pen_down = True
             add_pt(x, y, th, pen_down)
+            mark_line()
             continue
+
+        mark_line()
 
     if abs(xmax - xmin) < 1e-6:
         xmax += 1.0
@@ -466,7 +580,8 @@ def acode_to_trajectory(
             "arc_step_mm": arc_step_mm,
             "arc_step_deg": arc_step_deg,
             "home_resets_pose": home_resets_pose,
-        }
+        },
+        "line_frames": line_frames,
     }
 
 # ----------------------------
@@ -669,15 +784,19 @@ def generate_from_png(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     with open(out_acode, "r", encoding="utf-8", errors="ignore") as f:
         acode_text = f.read()
 
+    lines_list = _split_acode_lines(acode_text)
+    duration_s = estimate_total_duration(lines_list, ESTIMATE_DEFAULTS)
+
     meta = {
         "gen_id": gen_id,
         "warnings": warn,
         "params": params,
-        "acode_lines": len([ln for ln in acode_text.splitlines() if ln.strip()]),
+        "acode_lines": len(lines_list),
         "generator_stdout": (p1.stdout or "").strip(),
         "generator_stderr": (p1.stderr or "").strip(),
         "viz_stdout": (p2.stdout or "").strip(),
         "viz_stderr": (p2.stderr or "").strip(),
+        "duration_s": duration_s,
     }
 
     return {
@@ -688,6 +807,99 @@ def generate_from_png(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "preview_path": out_preview,
         "acode_text": acode_text,
         "meta": meta,
+        "duration_s": duration_s,
+    }
+
+def generate_from_dxf(dxf_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    err = _assert_tools_exist()
+    if err:
+        return {"ok": False, "error": err}
+
+    gen_id = str(uuid.uuid4())[:8]
+    out_acode = os.path.join(GEN_DIR, f"{gen_id}.acode")
+    out_preview = os.path.join(GEN_DIR, f"{gen_id}.preview.png")
+
+    cmd = [
+        "python3",
+        ACODE_PY_PATH,
+        dxf_path,
+        "-o",
+        out_acode,
+        "--feed-lin",
+        str(params["feed_lin"]),
+        "--feed-turn",
+        str(params["feed_turn"]),
+        "--feed-arc",
+        str(params["feed_arc"]),
+        "--flat-step",
+        str(params["flat_step"]),
+        "--epsilon",
+        str(params["epsilon"]),
+    ]
+
+    if params.get("layer"):
+        cmd += ["--layer", params["layer"]]
+    if not params.get("reorder", True):
+        cmd.append("--no-reorder")
+
+    p1 = _run_cmd(cmd, cwd=HERE)
+    if p1.returncode != 0 or not os.path.isfile(out_acode):
+        msg = (p1.stderr or p1.stdout or "").strip() or "DXF generator failed"
+        return {"ok": False, "error": msg}
+
+    cmd2 = [
+        "python3",
+        ACODEVIZ_PATH,
+        out_acode,
+        "-o",
+        out_preview,
+        "--acode-py",
+        ACODE_PY_PATH,
+        "--dpi",
+        str(params["viz_dpi"]),
+        "--arc-step-mm",
+        str(params["viz_arc_step_mm"]),
+        "--arc-step-deg",
+        str(params["viz_arc_step_deg"]),
+    ]
+    if params.get("viz_equal"):
+        cmd2.append("--equal")
+    if params.get("viz_invert_y"):
+        cmd2.append("--invert-y")
+    if params.get("viz_home_resets_pose"):
+        cmd2.append("--home-resets-pose")
+
+    p2 = _run_cmd(cmd2, cwd=HERE)
+    if p2.returncode != 0 or not os.path.isfile(out_preview):
+        msg = (p2.stderr or p2.stdout or "").strip() or "preview failed"
+        return {"ok": False, "error": msg}
+
+    with open(out_acode, "r", encoding="utf-8", errors="ignore") as f:
+        acode_text = f.read()
+
+    lines_list = _split_acode_lines(acode_text)
+    duration_s = estimate_total_duration(lines_list, ESTIMATE_DEFAULTS)
+
+    meta = {
+        "gen_id": gen_id,
+        "warnings": [],
+        "params": params,
+        "acode_lines": len(lines_list),
+        "generator_stdout": (p1.stdout or "").strip(),
+        "generator_stderr": (p1.stderr or "").strip(),
+        "viz_stdout": (p2.stdout or "").strip(),
+        "viz_stderr": (p2.stderr or "").strip(),
+        "duration_s": duration_s,
+    }
+
+    return {
+        "ok": True,
+        "gen_id": gen_id,
+        "acode_path": out_acode,
+        "preview_path": out_preview,
+        "acode_text": acode_text,
+        "meta": meta,
+        "duration_s": duration_s,
     }
 
 # ----------------------------
@@ -702,21 +914,28 @@ def api_load():
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
     content = request.form.get("acode", "")
+    start_line = _safe_int("start_line", 1)
 
     lines = [ln.rstrip("\r\n") for ln in content.splitlines()]
     lines = [ln for ln in lines if ln.strip()]
+
+    start_idx = max(0, min(len(lines), start_line - 1))
+    last_ok_line = lines[start_idx - 1] if start_idx > 0 else ""
+    duration_s = estimate_total_duration(lines, ESTIMATE_DEFAULTS)
 
     with state_lock:
         state.host = host
         state.port = port
         state.lines = lines
-        state.idx = 0
+        state.idx = start_idx
         state.error = ""
         state.last_sent = ""
         state.last_ok = False
+        state.last_ok_idx = start_idx
+        state.last_ok_line = last_ok_line
 
     push_event("status", {"msg": "loaded", "lines": len(lines)})
-    return jsonify({"ok": True, "lines": len(lines)})
+    return jsonify({"ok": True, "lines": len(lines), "start_line": start_idx + 1, "duration_s": duration_s})
 
 @app.route("/api/start", methods=["POST"])
 def api_start():
@@ -770,6 +989,8 @@ def sse_events():
                 "total": len(state.lines or []),
                 "last_sent": state.last_sent,
                 "last_ok": state.last_ok,
+                "last_ok_idx": state.last_ok_idx,
+                "last_ok_line": state.last_ok_line,
                 "error": state.error,
             }
         yield "data: " + json.dumps(snap) + "\n\n"
@@ -950,7 +1171,85 @@ def api_gen():
         "gen_id": result["gen_id"],
         "acode_lines": result["meta"]["acode_lines"],
         "warnings": result["meta"].get("warnings", []),
+        "duration_s": result.get("duration_s", 0.0),
     })
+
+# ----------------------------
+# Generator: DXF
+# ----------------------------
+@app.route("/api/dxf", methods=["POST"])
+def api_dxf():
+    if "dxf" not in request.files:
+        return jsonify({"ok": False, "error": "missing file field: dxf"}), 400
+
+    f = request.files["dxf"]
+    if not f.filename.lower().endswith(".dxf"):
+        return jsonify({"ok": False, "error": "only .dxf accepted"}), 400
+
+    gen_id_tmp = str(uuid.uuid4())[:8]
+    dxf_path = os.path.join(UPLOADS_DIR, f"{gen_id_tmp}.dxf")
+    f.save(dxf_path)
+
+    params = {
+        "layer": (request.form.get("layer", "") or "").strip(),
+        "reorder": not _safe_bool("no_reorder", False),
+        "feed_lin": _safe_int("feed_lin", 1200),
+        "feed_turn": _safe_int("feed_turn", 800),
+        "feed_arc": _safe_int("feed_arc", 800),
+        "flat_step": _safe_float("flat_step", 1.0),
+        "epsilon": _safe_float("epsilon", 0.25),
+        "viz_dpi": _safe_int("viz_dpi", 160),
+        "viz_arc_step_mm": _safe_float("viz_arc_step_mm", 1.0),
+        "viz_arc_step_deg": _safe_float("viz_arc_step_deg", 1.0),
+        "viz_equal": _safe_bool("viz_equal"),
+        "viz_invert_y": _safe_bool("viz_invert_y"),
+        "viz_home_resets_pose": _safe_bool("viz_home_resets_pose"),
+    }
+
+    result = generate_from_dxf(dxf_path, params)
+    if not result["ok"]:
+        with gen_lock:
+            gen_state.error = result["error"]
+        return jsonify({"ok": False, "error": result["error"]}), 500
+
+    machine = resolve_machine_settings(ACODE_PY_PATH)
+    with gen_lock:
+        gen_state.gen_id = result["gen_id"]
+        gen_state.png_path = ""
+        gen_state.acode_path = result["acode_path"]
+        gen_state.preview_path = result["preview_path"]
+        gen_state.acode_text = result["acode_text"]
+        gen_state.meta = result["meta"]
+        gen_state.error = ""
+        gen_state.viz_settings = {
+            "wheelbase_mm": machine["wheelbase_mm"],
+            "steps_per_mm": machine["steps_per_mm"],
+            "turn_gain": machine["turn_gain"],
+            "viz_arc_step_mm": params["viz_arc_step_mm"],
+            "viz_arc_step_deg": params["viz_arc_step_deg"],
+            "viz_home_resets_pose": params["viz_home_resets_pose"],
+            "viz_equal": params["viz_equal"],
+            "viz_invert_y": params["viz_invert_y"],
+        }
+
+    push_event(
+        "gen",
+        {
+            "msg": "dxf_generated",
+            "gen_id": result["gen_id"],
+            "lines": result["meta"]["acode_lines"],
+        },
+    )
+
+    return jsonify(
+        {
+            "ok": True,
+            "gen_id": result["gen_id"],
+            "acode_lines": result["meta"]["acode_lines"],
+            "warnings": result["meta"].get("warnings", []),
+            "duration_s": result.get("duration_s", 0.0),
+        }
+    )
 
 # ----------------------------
 # Generator: Text outline
@@ -1052,6 +1351,7 @@ def api_text_outline():
         "gen_id": result["gen_id"],
         "acode_lines": result["meta"]["acode_lines"],
         "warnings": result["meta"].get("warnings", []),
+        "duration_s": result.get("duration_s", 0.0),
     })
 
 # ----------------------------
@@ -1103,9 +1403,72 @@ def api_push_to_sender():
         state.error = ""
         state.last_sent = ""
         state.last_ok = False
+        state.last_ok_idx = 0
+        state.last_ok_line = ""
 
     push_event("status", {"msg": "loaded_from_generator", "lines": len(lines)})
     return jsonify({"ok": True, "lines": len(lines)})
+
+# ----------------------------
+# Sender preview + serial tools
+# ----------------------------
+@app.route("/api/sender_vizdata", methods=["POST"])
+def api_sender_vizdata():
+    content = request.form.get("acode", "") or ""
+    lines = _split_acode_lines(content)
+    if not lines:
+        return jsonify({"ok": False, "error": "no acode"}), 400
+
+    arc_step_mm = _safe_float("viz_arc_step_mm", 1.0)
+    arc_step_deg = _safe_float("viz_arc_step_deg", 1.0)
+    home_resets_pose = _safe_bool("viz_home_resets_pose", True)
+    viz_equal = _safe_bool("viz_equal", False)
+    viz_invert_y = _safe_bool("viz_invert_y", False)
+
+    machine = resolve_machine_settings(ACODE_PY_PATH)
+    traj = acode_to_trajectory(
+        lines=lines,
+        wheelbase_mm=machine["wheelbase_mm"],
+        steps_per_mm=machine["steps_per_mm"],
+        turn_gain=machine["turn_gain"],
+        arc_step_mm=arc_step_mm,
+        arc_step_deg=arc_step_deg,
+        home_resets_pose=home_resets_pose,
+    )
+    traj["viz"] = {"equal": viz_equal, "invert_y": viz_invert_y}
+
+    duration_s = estimate_total_duration(lines, ESTIMATE_DEFAULTS)
+
+    return jsonify({
+        "ok": True,
+        "points": traj["points"],
+        "bounds": traj["bounds"],
+        "settings": traj["settings"],
+        "line_frames": traj.get("line_frames", []),
+        "viz": traj["viz"],
+        "duration_s": duration_s,
+        "total_lines": len(lines),
+    })
+
+@app.route("/api/serial_send", methods=["POST"])
+def api_serial_send():
+    err = _busy_guard()
+    if err:
+        return jsonify({"ok": False, "error": err}), 409
+
+    host = request.form.get("host", "").strip() or "192.168.4.1"
+    port = _safe_int("port", DEFAULT_PORT)
+    line = (request.form.get("line", "") or "").strip()
+    if not line:
+        return jsonify({"ok": False, "error": "missing line"}), 400
+
+    push_event("line", {"idx": 0, "total": 0, "line": line})
+    out = send_one_command(host, port, line, timeout_s=LINE_ACK_TIMEOUT_S)
+    if out["ok"]:
+        push_event("ok", {"idx": 0, "line": line})
+        return jsonify({"ok": True, "line": line})
+    push_event("error", {"msg": out["error"] or "serial failed"})
+    return jsonify({"ok": False, "error": out["error"] or "serial failed"}), 500
 
 # ----------------------------
 # Simulator data endpoint
