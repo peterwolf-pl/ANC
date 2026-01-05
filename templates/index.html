@@ -8,7 +8,7 @@
   <link rel="icon" type="image/png" href="/static/ico.png">
 
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; max-width: 1100px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px auto; max-width: 1900px; }
     .header { display:flex; align-items:center; gap:14px; margin-bottom: 6px; }
     .header img { height: 44px; width: auto; display:block; }
     .tabs { display:flex; gap:10px; margin-bottom: 4px; flex-wrap: wrap; }
@@ -30,6 +30,27 @@
     .small { opacity: 0.8; font-size: 13px; }
     input, select { padding: 8px 10px; border:1px solid #ddd; border-radius: 10px; }
 
+    .panel-grid {
+      display: grid;
+      grid-template-columns: 0.4fr 0.6fr;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .panel-grid.tall {
+      align-items: stretch;
+    }
+
+    .panel-grid.tall .column {
+      min-height: 1000px;
+    }
+
+    .column {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
     .divider { margin: 10px 0; border-top: 1px solid #eee; }
 
     /* Settings list */
@@ -49,16 +70,8 @@
     .gen-vertical { display:flex; flex-direction: column; gap: 12px; }
     .gen-settings-scroll { max-height: 380px; overflow: auto; padding-right: 6px; }
 
-    .preview-fullwidth {
-      width: 100%;
-      display: flex;
-      justify-content: center;
-    }
-
-    .preview-fullwidth .box {
-      width: 100%;
-      max-width: 1200px;
-    }
+    .preview-fullwidth { width: 100%; display: flex; justify-content: center; }
+    .preview-fullwidth .box { width: 100%; max-width: none; }
 
     .preview-area {
       height: calc(100vh - 240px);
@@ -116,6 +129,10 @@
     .jog-meta input { width: 120px; }
     .jog-actions { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
+    @media (max-width: 1200px) {
+      .panel-grid { grid-template-columns: 1fr; }
+    }
+
     @media (max-width: 980px) {
       .gen-settings-scroll { max-height: none; overflow: visible; padding-right: 0; }
       .preview-area { height: 60vh; min-height: 320px; }
@@ -143,157 +160,156 @@
 
   <!-- Sender -->
   <div class="panel active" id="panel-sender">
-    <div class="box">
-      <div class="row">
-        <label>Host: <input id="host" value="192.168.4.1"></label>
-        <label>Port: <input id="port" value="23" inputmode="numeric"></label>
-        <label>Start line: <input id="start_line" value="1" inputmode="numeric" style="width:120px"></label>
-        <button class="btn" id="load">Load</button>
-        <span class="pill" id="loaded">not loaded</span>
-      </div>
-
-      <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Text outline..."></textarea>
-
-      <div class="row">
-        <button class="btn" id="start">Start</button>
-        <button class="btn" id="pause">Pause</button>
-        <button class="btn" id="resume">Resume</button>
-        <button class="btn" id="stop">Stop</button>
-        <span class="pill" id="runstate">idle</span>
-      </div>
-    </div>
-
-    <div style="height:12px"></div>
-
-    <div class="box">
-      <div class="row">
-        <div class="pill">Progress: <span id="progress" class="mono">0/0</span></div>
-        <div class="pill">Last OK line #: <span id="lastok" class="mono">-</span></div>
-        <div class="pill">Est. czas: <span id="senderDuration" class="mono">-</span></div>
-      </div>
-
-      <div style="height:10px"></div>
-
-      <div class="mono" style="font-size:16px;">
-        <div class="small">Aktualna linia</div>
-        <div id="current" style="padding:10px; border:1px solid #eee; border-radius:10px; min-height:44px;"></div>
-        <div class="small" style="margin-top:10px;">Ostatnia linia OK</div>
-        <div id="lastokline" style="padding:10px; border:1px solid #eee; border-radius:10px; min-height:44px;"></div>
-        <div id="error" class="err" style="margin-top:10px;"></div>
-      </div>
-    </div>
-
-    <div style="height:12px"></div>
-
-    <div class="box">
-      <div class="row" style="justify-content: space-between; align-items: flex-start;">
-        <div>
-          <div style="font-weight:700;">Serial (ręcznie)</div>
-          <div class="small">Wyślij pojedynczą linię ACODE "z palca". Działa gdy druk jest zatrzymany lub zapauzowany.</div>
-        </div>
-        <span class="pill">manual TX</span>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="row" style="align-items: center;">
-        <input id="manual_line" placeholder="np. W L400 R400 F1200" style="flex:1; min-width:260px;">
-        <button class="btn" id="manual_send">Wyślij</button>
-        <div class="err" id="serialerr"></div>
-      </div>
-    </div>
-
-    <div style="height:12px"></div>
-
-    <div class="box">
-      <div style="font-weight:700;">Symulator (druk)</div>
-      <div class="small">Podgląd ścieżki zsynchronizowany z aktualnie wykonywaną linią.</div>
-
-      <div class="preview-area small" style="margin-top:10px;">
-        <img id="senderPrev" alt="preview sender" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=" />
-        <canvas id="simCanvasSender" class="simCanvas"></canvas>
-      </div>
-
-      <div class="sim-controls">
-        <button class="btn" id="simPlaySender">Play</button>
-        <button class="btn" id="simPauseSender">Pause</button>
-        <button class="btn" id="simResetSender">Reset</button>
-
-        <span class="pill">Speed</span>
-        <input id="simSpeedSender" type="range" min="0.25" max="6" step="0.25" value="2">
-        <span class="pill mono" id="simSpeedValSender">2.00x</span>
-
-        <span class="pill">Frame</span>
-        <input id="simScrubSender" type="range" min="0" max="0" step="1" value="0">
-        <span class="pill mono" id="simPosSender">0/0</span>
-
-        <span class="pill">Sprite scale</span>
-        <input id="simSpriteScaleSender" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
-        <span class="pill mono" id="simSpriteScaleValSender">0.35</span>
-
-        <span class="pill">wheelbase</span>
-        <span class="pill mono" id="simWheelbaseSender">-</span>
-      </div>
-
-      <div class="small">
-        Estymowany czas pracy: <span class="mono" id="simDurationSender">-</span>. Scrubber śledzi postęp drukowania w czasie rzeczywistym.
-      </div>
-    </div>
-
-    <div style="height:12px"></div>
-
-    <!-- Jog / Pen / Steppers -->
-    <div class="box">
-      <div class="row" style="justify-content: space-between;">
-        <div>
-          <div style="font-weight:700;">Jog</div>
-          <div class="small">Przód/tył = jazda prosto. Lewo/prawo = obrót w miejscu.</div>
-        </div>
-        <div class="pill">Działa tylko gdy druk jest zatrzymany albo zapauzowany</div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="jog-wrap">
-        <div class="jog-pad">
-          <div></div>
-          <button class="btn" id="jog_fwd">↑</button>
-          <div></div>
-
-          <button class="btn" id="jog_left">←</button>
-          <button class="btn" id="jog_stop" title="nic nie wysyła, tylko czyści błąd">■</button>
-          <button class="btn" id="jog_right">→</button>
-
-          <div></div>
-          <button class="btn" id="jog_back">↓</button>
-          <div></div>
-        </div>
-
-        <div class="jog-meta">
+    <div class="panel-grid">
+      <div class="column">
+        <div class="box">
           <div class="row">
-            <label>jog_mm <input id="jog_mm" value="10" inputmode="decimal"></label>
-            <label>feed <input id="jog_feed" value="1200" inputmode="numeric"></label>
+            <label>Host: <input id="host" value="192.168.4.1"></label>
+            <label>Port: <input id="port" value="3333" inputmode="numeric"></label>
+            <label>Start line: <input id="start_line" value="1" inputmode="numeric" style="width:120px"></label>
+            <button class="btn" id="load">Load</button>
+            <span class="pill" id="loaded">not loaded</span>
           </div>
+
+          <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Text outline..."></textarea>
+
           <div class="row">
-            <label>steps_per_mm <input id="steps_per_mm" value="9.142857" inputmode="decimal"></label>
-            <span class="small">Jak masz inne, zmień.</span>
+            <button class="btn" id="start">Start</button>
+            <button class="btn" id="pause">Pause</button>
+            <button class="btn" id="resume">Resume</button>
+            <button class="btn" id="stop">Stop</button>
+            <span class="pill" id="runstate">idle</span>
+          </div>
+        </div>
+
+        <div class="box">
+          <div class="row">
+            <div class="pill">Progress: <span id="progress" class="mono">0/0</span></div>
+            <div class="pill">Last OK line #: <span id="lastok" class="mono">-</span></div>
+            <div class="pill">Est. czas: <span id="senderDuration" class="mono">-</span></div>
+          </div>
+
+          <div style="height:10px"></div>
+
+          <div class="mono" style="font-size:16px;">
+            <div class="small">Aktualna linia</div>
+            <div id="current" style="padding:10px; border:1px solid #eee; border-radius:10px; min-height:44px;"></div>
+            <div class="small" style="margin-top:10px;">Ostatnia linia OK</div>
+            <div id="lastokline" style="padding:10px; border:1px solid #eee; border-radius:10px; min-height:44px;"></div>
+            <div id="error" class="err" style="margin-top:10px;"></div>
+          </div>
+        </div>
+
+        <div class="box">
+          <div class="row" style="justify-content: space-between; align-items: flex-start;">
+            <div>
+              <div style="font-weight:700;">Serial (ręcznie)</div>
+              <div class="small">Wyślij pojedynczą linię ACODE \"z palca\". Działa gdy druk jest zatrzymany lub zapauzowany.</div>
+            </div>
+            <span class="pill">manual TX</span>
           </div>
 
           <div class="divider"></div>
 
-          <div class="jog-actions">
-            <button class="btn" id="pen_up">Pen Up</button>
-            <button class="btn dark" id="pen_down">Pen Down</button>
+          <div class="row" style="align-items: center;">
+            <input id="manual_line" placeholder="np. W L400 R400 F1200" style="flex:1; min-width:260px;">
+            <button class="btn" id="manual_send">Wyślij</button>
+            <div class="err" id="serialerr"></div>
+          </div>
+        </div>
 
-            <span class="pill">Steppers</span>
-            <input id="step_en_cmd" value="E 1" style="width:120px" title="komenda enable">
-            <button class="btn" id="step_enable">Enable</button>
+      </div>
 
-            <input id="step_dis_cmd" value="E 0" style="width:120px" title="komenda disable">
-            <button class="btn" id="step_disable">Disable</button>
+      <div class="column">
+        <div class="box">
+          <div style="font-weight:700;">Symulator (druk)</div>
+          <div class="small">Podgląd ścieżki zsynchronizowany z aktualnie wykonywaną linią.</div>
+
+          <div class="preview-area small" style="margin-top:10px;">
+            <img id="senderPrev" alt="preview sender" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=" />
+            <canvas id="simCanvasSender" class="simCanvas"></canvas>
           </div>
 
-          <div class="err" id="jogerr"></div>
+          <div class="sim-controls">
+            <button class="btn" id="simPlaySender">Play</button>
+            <button class="btn" id="simPauseSender">Pause</button>
+            <button class="btn" id="simResetSender">Reset</button>
+
+            <span class="pill">Speed</span>
+            <input id="simSpeedSender" type="range" min="0.25" max="6" step="0.25" value="2">
+            <span class="pill mono" id="simSpeedValSender">2.00x</span>
+
+            <span class="pill">Frame</span>
+            <input id="simScrubSender" type="range" min="0" max="0" step="1" value="0">
+            <span class="pill mono" id="simPosSender">0/0</span>
+
+            <span class="pill">Sprite scale</span>
+            <input id="simSpriteScaleSender" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+            <span class="pill mono" id="simSpriteScaleValSender">0.35</span>
+
+            <span class="pill">wheelbase</span>
+            <span class="pill mono" id="simWheelbaseSender">-</span>
+          </div>
+
+          <div class="small">
+            Estymowany czas pracy: <span class="mono" id="simDurationSender">-</span>. Scrubber śledzi postęp drukowania w czasie rzeczywistym.
+          </div>
+        </div>
+
+        <!-- Jog / Pen / Steppers -->
+        <div class="box">
+          <div class="row" style="justify-content: space-between;">
+            <div>
+              <div style="font-weight:700;">Jog</div>
+              <div class="small">Przód/tył = jazda prosto. Lewo/prawo = obrót w miejscu.</div>
+            </div>
+            <div class="pill">Działa tylko gdy druk jest zatrzymany albo zapauzowany</div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="jog-wrap">
+            <div class="jog-pad">
+              <div></div>
+              <button class="btn" id="jog_fwd">↑</button>
+              <div></div>
+
+              <button class="btn" id="jog_left">←</button>
+              <button class="btn" id="jog_stop" title="nic nie wysyła, tylko czyści błąd">■</button>
+              <button class="btn" id="jog_right">→</button>
+
+              <div></div>
+              <button class="btn" id="jog_back">↓</button>
+              <div></div>
+            </div>
+
+            <div class="jog-meta">
+              <div class="row">
+                <label>jog_mm <input id="jog_mm" value="10" inputmode="decimal"></label>
+                <label>feed <input id="jog_feed" value="1200" inputmode="numeric"></label>
+              </div>
+              <div class="row">
+                <label>steps_per_mm <input id="steps_per_mm" value="9.142857" inputmode="decimal"></label>
+                <span class="small">Jak masz inne, zmień.</span>
+              </div>
+
+              <div class="divider"></div>
+
+              <div class="jog-actions">
+                <button class="btn" id="pen_up">Pen Up</button>
+                <button class="btn dark" id="pen_down">Pen Down</button>
+
+                <span class="pill">Steppers</span>
+                <input id="step_en_cmd" value="E 1" style="width:120px" title="komenda enable">
+                <button class="btn" id="step_enable">Enable</button>
+
+                <input id="step_dis_cmd" value="E 0" style="width:120px" title="komenda disable">
+                <button class="btn" id="step_disable">Disable</button>
+              </div>
+
+              <div class="err" id="jogerr"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -301,221 +317,225 @@
 
   <!-- Generator PNG -->
   <div class="panel" id="panel-generator">
-    <div class="gen-vertical">
+    <div class="panel-grid tall">
+      <div class="column gen-vertical">
 
-      <div class="box">
-        <div class="row">
-          <input type="file" id="png" accept="image/png" />
-          <button class="btn" id="gen">Generate</button>
-          <span class="pill" id="geninfo">no output</span>
-          <span class="pill" id="genduration">est: -</span>
-          <span class="err" id="generr"></span>
-        </div>
-
-        <div class="divider"></div>
-
-        <div class="gen-settings-scroll">
-          <div class="setting-list">
-
-            <div class="setting-item">
-              <div class="label"><b>Przejście na kolejną linię</b><span>Tryb zmiany wiersza rastra</span></div>
-              <div class="control">
-                <select id="line_advance">
-                  <option value="soft" selected>Obecne (łagodne)</option>
-                  <option value="turn90">Klasyczne: obrót 90 + przejazd prostopadły</option>
-                  <option value="real90">REAL 90: przejazdy prostopadłe, rzędy równoległe</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>img_width_mm</b><span>Szerokość wydruku w mm</span></div>
-              <div class="control"><input id="img_width_mm" value="120.0" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>work_width_px</b><span>Rozdzielczość robocza w px</span></div>
-              <div class="control"><input id="work_width_px" value="1600" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>line_spacing_mm</b><span>Odstęp między liniami w mm</span></div>
-              <div class="control"><input id="line_spacing_mm" value="0.7" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>threshold</b><span>0..255, próg jasności</span></div>
-              <div class="control"><input id="threshold" value="160" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>gamma</b><span>Wzmocnienie kontrastu</span></div>
-              <div class="control"><input id="gamma" value="1.0" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>min_segment_mm</b><span>Minimalny segment kreski</span></div>
-              <div class="control"><input id="min_segment_mm" value="1.0" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>y_jitter_mm</b><span>Antybanding</span></div>
-              <div class="control"><input id="y_jitter_mm" value="0.04" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>seed</b><span>Puste = losowo</span></div>
-              <div class="control"><input id="seed" value="" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>scan</b><span>serpentine albo ltr</span></div>
-              <div class="control">
-                <select id="scan">
-                  <option value="serpentine" selected>serpentine</option>
-                  <option value="ltr">ltr</option>
-                  <option value="ltr+rtl">ltr+rtl</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>y_order</b><span>Kolejność wierszy (góra→dół / dół→góra)</span></div>
-              <div class="control">
-                <select id="y_order">
-                  <option value="top-down" selected>góra → dół</option>
-                  <option value="bottom-up">dół → góra</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>x_mode</b><span>pixel albo step</span></div>
-              <div class="control">
-                <select id="x_mode">
-                  <option value="pixel" selected>pixel</option>
-                  <option value="step">step</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>x_step_mm</b><span>Używane tylko w trybie step</span></div>
-              <div class="control"><input id="x_step_mm" value="0.25" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>row_angle_deg</b><span>Skręt przy zmianie wiersza</span></div>
-              <div class="control"><input id="row_angle_deg" value="18.0" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>soft_min_dy_mm</b><span>Minimalny skok Y</span></div>
-              <div class="control"><input id="soft_min_dy_mm" value="0.3" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>feed_lin</b><span>Feed dla jazdy prostej</span></div>
-              <div class="control"><input id="feed_lin" value="1200" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>feed_turn</b><span>Feed dla skrętów</span></div>
-              <div class="control"><input id="feed_turn" value="800" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>margin_mm</b><span>Margines</span></div>
-              <div class="control"><input id="margin_mm" value="0.0" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>invert</b><span>Odwróć jasność</span></div>
-              <div class="control"><input type="checkbox" id="invert" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>flip_y</b><span>Odwróć oś Y</span></div>
-              <div class="control"><input type="checkbox" id="flip_y" /></div>
-            </div>
-
-            <div class="divider"></div>
-
-            <div class="setting-item">
-              <div class="label"><b>viz_dpi</b><span>Podgląd: DPI</span></div>
-              <div class="control"><input id="viz_dpi" value="160" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
-              <div class="control"><input id="viz_arc_step_mm" value="1.0" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
-              <div class="control"><input id="viz_arc_step_deg" value="1.0" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
-              <div class="control"><input type="checkbox" id="viz_equal" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
-              <div class="control"><input type="checkbox" id="viz_invert_y" /></div>
-            </div>
-
-            <div class="setting-item">
-              <div class="label"><b>viz_home_resets_pose</b><span>Podgląd: H resetuje pozycję</span></div>
-              <div class="control"><input type="checkbox" id="viz_home_resets_pose" /></div>
-            </div>
-
+        <div class="box">
+          <div class="row">
+            <input type="file" id="png" accept="image/png" />
+            <button class="btn" id="gen">Generate</button>
+            <span class="pill" id="geninfo">no output</span>
+            <span class="pill" id="genduration">est: -</span>
+            <span class="err" id="generr"></span>
           </div>
-        </div>
 
-        <div class="divider"></div>
+          <div class="divider"></div>
 
-        <div class="row">
-          <button class="btn" id="push">Push to Sender</button>
-          <button class="btn" id="download">Download .acode</button>
+          <div class="gen-settings-scroll">
+            <div class="setting-list">
+
+              <div class="setting-item">
+                <div class="label"><b>Przejście na kolejną linię</b><span>Tryb zmiany wiersza rastra</span></div>
+                <div class="control">
+                  <select id="line_advance">
+                    <option value="soft" selected>Obecne (łagodne)</option>
+                    <option value="turn90">Klasyczne: obrót 90 + przejazd prostopadły</option>
+                    <option value="real90">REAL 90: przejazdy prostopadłe, rzędy równoległe</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>img_width_mm</b><span>Szerokość wydruku w mm</span></div>
+                <div class="control"><input id="img_width_mm" value="120.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>work_width_px</b><span>Rozdzielczość robocza w px</span></div>
+                <div class="control"><input id="work_width_px" value="1600" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>line_spacing_mm</b><span>Odstęp między liniami w mm</span></div>
+                <div class="control"><input id="line_spacing_mm" value="0.7" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>threshold</b><span>0..255, próg jasności</span></div>
+                <div class="control"><input id="threshold" value="160" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>gamma</b><span>Wzmocnienie kontrastu</span></div>
+                <div class="control"><input id="gamma" value="1.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>min_segment_mm</b><span>Minimalny segment kreski</span></div>
+                <div class="control"><input id="min_segment_mm" value="1.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>y_jitter_mm</b><span>Antybanding</span></div>
+                <div class="control"><input id="y_jitter_mm" value="0.04" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>seed</b><span>Puste = losowo</span></div>
+                <div class="control"><input id="seed" value="" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>scan</b><span>serpentine albo ltr</span></div>
+                <div class="control">
+                  <select id="scan">
+                    <option value="serpentine" selected>serpentine</option>
+                    <option value="ltr">ltr</option>
+                    <option value="ltr+rtl">ltr+rtl</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>y_order</b><span>Kolejność wierszy (góra→dół / dół→góra)</span></div>
+                <div class="control">
+                  <select id="y_order">
+                    <option value="top-down" selected>góra → dół</option>
+                    <option value="bottom-up">dół → góra</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>x_mode</b><span>pixel albo step</span></div>
+                <div class="control">
+                  <select id="x_mode">
+                    <option value="pixel" selected>pixel</option>
+                    <option value="step">step</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>x_step_mm</b><span>Używane tylko w trybie step</span></div>
+                <div class="control"><input id="x_step_mm" value="0.25" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>row_angle_deg</b><span>Skręt przy zmianie wiersza</span></div>
+                <div class="control"><input id="row_angle_deg" value="18.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>soft_min_dy_mm</b><span>Minimalny skok Y</span></div>
+                <div class="control"><input id="soft_min_dy_mm" value="0.3" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>feed_lin</b><span>Feed dla jazdy prostej</span></div>
+                <div class="control"><input id="feed_lin" value="1200" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>feed_turn</b><span>Feed dla skrętów</span></div>
+                <div class="control"><input id="feed_turn" value="800" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>margin_mm</b><span>Margines</span></div>
+                <div class="control"><input id="margin_mm" value="0.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>invert</b><span>Odwróć jasność</span></div>
+                <div class="control"><input type="checkbox" id="invert" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>flip_y</b><span>Odwróć oś Y</span></div>
+                <div class="control"><input type="checkbox" id="flip_y" /></div>
+              </div>
+
+              <div class="divider"></div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_dpi</b><span>Podgląd: DPI</span></div>
+                <div class="control"><input id="viz_dpi" value="160" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
+                <div class="control"><input id="viz_arc_step_mm" value="1.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
+                <div class="control"><input id="viz_arc_step_deg" value="1.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
+                <div class="control"><input type="checkbox" id="viz_equal" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
+                <div class="control"><input type="checkbox" id="viz_invert_y" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_home_resets_pose</b><span>Podgląd: H resetuje pozycję</span></div>
+                <div class="control"><input type="checkbox" id="viz_home_resets_pose" /></div>
+              </div>
+
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="row">
+            <button class="btn" id="push">Push to Sender</button>
+            <button class="btn" id="download">Download .acode</button>
+          </div>
         </div>
       </div>
 
-      <div class="preview-fullwidth">
-        <div class="box">
-          <div class="small">Preview + Symulator (maszyna.png)</div>
+      <div class="column">
+        <div class="preview-fullwidth">
+          <div class="box">
+            <div class="small">Preview + Symulator (maszyna.png)</div>
 
-          <div class="preview-area" style="margin-top:10px;">
-            <img id="previmg" alt="preview" />
-            <canvas id="simCanvasGen" class="simCanvas"></canvas>
-          </div>
+            <div class="preview-area" style="margin-top:10px;">
+              <img id="previmg" alt="preview" />
+              <canvas id="simCanvasGen" class="simCanvas"></canvas>
+            </div>
 
-          <div class="sim-controls">
-            <button class="btn" id="simPlayGen">Play</button>
-            <button class="btn" id="simPauseGen">Pause</button>
-            <button class="btn" id="simResetGen">Reset</button>
+            <div class="sim-controls">
+              <button class="btn" id="simPlayGen">Play</button>
+              <button class="btn" id="simPauseGen">Pause</button>
+              <button class="btn" id="simResetGen">Reset</button>
 
-            <span class="pill">Speed</span>
-            <input id="simSpeedGen" type="range" min="0.25" max="6" step="0.25" value="2">
-            <span class="pill mono" id="simSpeedValGen">2.00x</span>
+              <span class="pill">Speed</span>
+              <input id="simSpeedGen" type="range" min="0.25" max="6" step="0.25" value="2">
+              <span class="pill mono" id="simSpeedValGen">2.00x</span>
 
-            <span class="pill">Frame</span>
-            <input id="simScrubGen" type="range" min="0" max="0" step="1" value="0">
-            <span class="pill mono" id="simPosGen">0/0</span>
+              <span class="pill">Frame</span>
+              <input id="simScrubGen" type="range" min="0" max="0" step="1" value="0">
+              <span class="pill mono" id="simPosGen">0/0</span>
 
-            <span class="pill">Sprite scale</span>
-            <input id="simSpriteScaleGen" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
-            <span class="pill mono" id="simSpriteScaleValGen">0.35</span>
+              <span class="pill">Sprite scale</span>
+              <input id="simSpriteScaleGen" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+              <span class="pill mono" id="simSpriteScaleValGen">0.35</span>
 
-            <span class="pill">wheelbase</span>
-            <span class="pill mono" id="simWheelbaseGen">-</span>
-          </div>
+              <span class="pill">wheelbase</span>
+              <span class="pill mono" id="simWheelbaseGen">-</span>
+            </div>
 
-          <div class="small">
-            Fix na "za duża maszyna":
-            szerokość sprite = wheelbase_mm * pxPerMm * sprite_scale,
-            plus limit max 30% szerokości podglądu.
+            <div class="small">
+              Fix na "za duża maszyna":
+              szerokość sprite = wheelbase_mm * pxPerMm * sprite_scale,
+              plus limit max 30% szerokości podglądu.
+            </div>
           </div>
         </div>
       </div>
@@ -525,125 +545,129 @@
 
   <!-- DXF -->
   <div class="panel" id="panel-dxf">
-    <div class="gen-vertical">
-      <div class="box">
-        <div class="row">
-          <input type="file" id="dxf" accept=".dxf" />
-          <button class="btn" id="dxf_gen">Generate</button>
-          <span class="pill" id="dxf_info">no output</span>
-          <span class="pill" id="dxf_duration">est: -</span>
-          <span class="err" id="dxf_err"></span>
-        </div>
+    <div class="panel-grid tall">
+      <div class="column gen-vertical">
+        <div class="box">
+          <div class="row">
+            <input type="file" id="dxf" accept=".dxf" />
+            <button class="btn" id="dxf_gen">Generate</button>
+            <span class="pill" id="dxf_info">no output</span>
+            <span class="pill" id="dxf_duration">est: -</span>
+            <span class="err" id="dxf_err"></span>
+          </div>
 
-        <div class="divider"></div>
+          <div class="divider"></div>
 
-        <div class="gen-settings-scroll">
-          <div class="setting-list">
-            <div class="setting-item">
-              <div class="label"><b>layer</b><span>Pusta = wszystkie</span></div>
-              <div class="control"><input id="dxf_layer" value="" /></div>
-            </div>
+          <div class="gen-settings-scroll">
+            <div class="setting-list">
+              <div class="setting-item">
+                <div class="label"><b>layer</b><span>Pusta = wszystkie</span></div>
+                <div class="control"><input id="dxf_layer" value="" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>reorder ścieżek</b><span>Najbliższy sąsiad (zalecane)</span></div>
-              <div class="control"><input type="checkbox" id="dxf_reorder" checked /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>reorder ścieżek</b><span>Najbliższy sąsiad (zalecane)</span></div>
+                <div class="control"><input type="checkbox" id="dxf_reorder" checked /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>feed_lin</b><span>Feed dla linii</span></div>
-              <div class="control"><input id="dxf_feed_lin" value="1200" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>feed_lin</b><span>Feed dla linii</span></div>
+                <div class="control"><input id="dxf_feed_lin" value="1200" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>feed_turn</b><span>Feed dla skrętów</span></div>
-              <div class="control"><input id="dxf_feed_turn" value="800" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>feed_turn</b><span>Feed dla skrętów</span></div>
+                <div class="control"><input id="dxf_feed_turn" value="800" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>feed_arc</b><span>Feed dla łuków</span></div>
-              <div class="control"><input id="dxf_feed_arc" value="800" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>feed_arc</b><span>Feed dla łuków</span></div>
+                <div class="control"><input id="dxf_feed_arc" value="800" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>flat_step</b><span>Krok segmentacji łuku (mm)</span></div>
-              <div class="control"><input id="dxf_flat_step" value="1.0" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>flat_step</b><span>Krok segmentacji łuku (mm)</span></div>
+                <div class="control"><input id="dxf_flat_step" value="1.0" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>epsilon</b><span>Simplify epsilon (mm)</span></div>
-              <div class="control"><input id="dxf_epsilon" value="0.25" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>epsilon</b><span>Simplify epsilon (mm)</span></div>
+                <div class="control"><input id="dxf_epsilon" value="0.25" /></div>
+              </div>
 
-            <div class="divider"></div>
+              <div class="divider"></div>
 
-            <div class="setting-item">
-              <div class="label"><b>viz_dpi</b><span>Podgląd: DPI</span></div>
-              <div class="control"><input id="dxf_viz_dpi" value="160" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>viz_dpi</b><span>Podgląd: DPI</span></div>
+                <div class="control"><input id="dxf_viz_dpi" value="160" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
-              <div class="control"><input id="dxf_viz_arc_step_mm" value="1.0" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
+                <div class="control"><input id="dxf_viz_arc_step_mm" value="1.0" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
-              <div class="control"><input id="dxf_viz_arc_step_deg" value="1.0" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
+                <div class="control"><input id="dxf_viz_arc_step_deg" value="1.0" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
-              <div class="control"><input type="checkbox" id="dxf_viz_equal" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
+                <div class="control"><input type="checkbox" id="dxf_viz_equal" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
-              <div class="control"><input type="checkbox" id="dxf_viz_invert_y" /></div>
-            </div>
+              <div class="setting-item">
+                <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
+                <div class="control"><input type="checkbox" id="dxf_viz_invert_y" /></div>
+              </div>
 
-            <div class="setting-item">
-              <div class="label"><b>viz_home_resets_pose</b><span>Podgląd: H resetuje pozycję</span></div>
-              <div class="control"><input type="checkbox" id="dxf_viz_home_resets_pose" /></div>
+              <div class="setting-item">
+                <div class="label"><b>viz_home_resets_pose</b><span>Podgląd: H resetuje pozycję</span></div>
+                <div class="control"><input type="checkbox" id="dxf_viz_home_resets_pose" /></div>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div class="divider"></div>
+          <div class="divider"></div>
 
-        <div class="row">
-          <button class="btn" id="dxf_push">Push to Sender</button>
-          <button class="btn" id="dxf_download">Download .acode</button>
+          <div class="row">
+            <button class="btn" id="dxf_push">Push to Sender</button>
+            <button class="btn" id="dxf_download">Download .acode</button>
+          </div>
         </div>
       </div>
 
-      <div class="preview-fullwidth">
-        <div class="box">
-          <div class="small">Preview + Symulator (maszyna.png)</div>
+      <div class="column">
+        <div class="preview-fullwidth">
+          <div class="box">
+            <div class="small">Preview + Symulator (maszyna.png)</div>
 
-          <div class="preview-area" style="margin-top:10px;">
-            <img id="dxf_previmg" alt="preview" />
-            <canvas id="simCanvasDxf" class="simCanvas"></canvas>
-          </div>
+            <div class="preview-area" style="margin-top:10px;">
+              <img id="dxf_previmg" alt="preview" />
+              <canvas id="simCanvasDxf" class="simCanvas"></canvas>
+            </div>
 
-          <div class="sim-controls">
-            <button class="btn" id="simPlayDxf">Play</button>
-            <button class="btn" id="simPauseDxf">Pause</button>
-            <button class="btn" id="simResetDxf">Reset</button>
+            <div class="sim-controls">
+              <button class="btn" id="simPlayDxf">Play</button>
+              <button class="btn" id="simPauseDxf">Pause</button>
+              <button class="btn" id="simResetDxf">Reset</button>
 
-            <span class="pill">Speed</span>
-            <input id="simSpeedDxf" type="range" min="0.25" max="6" step="0.25" value="2">
-            <span class="pill mono" id="simSpeedValDxf">2.00x</span>
+              <span class="pill">Speed</span>
+              <input id="simSpeedDxf" type="range" min="0.25" max="6" step="0.25" value="2">
+              <span class="pill mono" id="simSpeedValDxf">2.00x</span>
 
-            <span class="pill">Frame</span>
-            <input id="simScrubDxf" type="range" min="0" max="0" step="1" value="0">
-            <span class="pill mono" id="simPosDxf">0/0</span>
+              <span class="pill">Frame</span>
+              <input id="simScrubDxf" type="range" min="0" max="0" step="1" value="0">
+              <span class="pill mono" id="simPosDxf">0/0</span>
 
-            <span class="pill">Sprite scale</span>
-            <input id="simSpriteScaleDxf" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
-            <span class="pill mono" id="simSpriteScaleValDxf">0.35</span>
+              <span class="pill">Sprite scale</span>
+              <input id="simSpriteScaleDxf" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+              <span class="pill mono" id="simSpriteScaleValDxf">0.35</span>
 
-            <span class="pill">wheelbase</span>
-            <span class="pill mono" id="simWheelbaseDxf">-</span>
+              <span class="pill">wheelbase</span>
+              <span class="pill mono" id="simWheelbaseDxf">-</span>
+            </div>
           </div>
         </div>
       </div>
@@ -652,7 +676,9 @@
 
   <!-- Text outline -->
   <div class="panel" id="panel-text">
-    <div class="gen-vertical">
+    <div class="panel-grid tall">
+
+      <div class="column gen-vertical">
 
       <div class="box">
         <div class="row">
@@ -756,12 +782,14 @@
 
         <div class="divider"></div>
 
-        <div class="row">
-          <button class="btn" id="t_push">Push to Sender</button>
-          <button class="btn" id="t_download">Download .acode</button>
+          <div class="row">
+            <button class="btn" id="t_push">Push to Sender</button>
+            <button class="btn" id="t_download">Download .acode</button>
+          </div>
         </div>
       </div>
 
+      <div class="column">
       <div class="preview-fullwidth">
         <div class="box">
           <div class="small">Preview + Symulator (maszyna.png)</div>
@@ -792,6 +820,7 @@
             <span class="pill mono" id="simWheelbaseText">-</span>
           </div>
         </div>
+      </div>
       </div>
 
     </div>
