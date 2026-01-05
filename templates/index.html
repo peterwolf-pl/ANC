@@ -171,6 +171,11 @@
             <span class="pill" id="loaded">not loaded</span>
           </div>
 
+          <div class="row">
+            <span class="pill" id="linkStatus">WiFi: -</span>
+            <span class="pill" id="machineState">State: -</span>
+          </div>
+
           <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Text outline..."></textarea>
 
           <div class="row">
@@ -880,6 +885,15 @@
     return `${s}s`;
   }
 
+  function setLinkStatus(txt) {
+    qs("linkStatus").textContent = txt ? `WiFi: ${txt}` : "WiFi: -";
+  }
+
+  function setMachineState(state, detail = "") {
+    const suffix = detail ? ` (${detail})` : "";
+    qs("machineState").textContent = state ? `State: ${state}${suffix}` : "State: -";
+  }
+
   // Sender
   async function loadAcode() {
     const fd = new FormData();
@@ -914,6 +928,8 @@
   };
 
   // SSE
+  setLinkStatus("disconnected");
+  setMachineState("");
   const ev = new EventSource("/events");
   ev.onmessage = (e) => {
     const data = JSON.parse(e.data);
@@ -944,6 +960,15 @@
         if (payload.line) qs("lastokline").textContent = payload.line;
       }
       if (kind === "error") qs("error").textContent = payload.msg;
+      if (kind === "status") {
+        qs("runstate").textContent = payload.msg || "idle";
+        if (payload.msg === "connected") setLinkStatus(`${qs("host").value}:${qs("port").value}`);
+        else if (payload.msg === "connecting") setLinkStatus("connecting...");
+        else if (payload.msg === "stopped" || payload.msg === "disconnected") setLinkStatus("disconnected");
+      }
+      if (kind === "machine_state") {
+        setMachineState(payload.state, payload.detail || "");
+      }
       return;
     }
 
