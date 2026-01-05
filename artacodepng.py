@@ -70,6 +70,12 @@ def emit_straight(out: List[str], ds: float, feed_lin: int):
     s = steps_from_mm(ds)
     emit_w(out, s, s, feed_lin)
 
+def emit_straight_signed(out: List[str], ds: float, feed_lin: int):
+    """Straight move that can go backwards (negative ds)."""
+    sign = 1 if ds >= 0 else -1
+    s = steps_from_mm(abs(ds)) * sign
+    emit_w(out, s, s, feed_lin)
+
 def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
@@ -416,9 +422,37 @@ def lines_to_acode(
 
         axis_move_to(nx, ny, target_heading)
 
+    def axis_move_to_zigzag(nx: float, ny: float, preferred_heading: float):
+        """Axis move that keeps heading and allows reverse motion along X."""
+        nonlocal x, y, heading
+
+        dy = ny - y
+        if abs(dy) > 1e-9:
+            axis_y = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
+            dtheta = wrap_pi(axis_y - heading)
+            if abs(dtheta) > 1e-9:
+                emit_turn_in_place(out, dtheta, feed_turn)
+            heading = axis_y
+            emit_straight_signed(out, dy, feed_lin)
+            y = ny
+
+        axis_pref = snap_axis_heading(preferred_heading)
+        dtheta_pref = wrap_pi(axis_pref - heading)
+        if abs(dtheta_pref) > 1e-9:
+            emit_turn_in_place(out, dtheta_pref, feed_turn)
+        heading = axis_pref
+
+        dx = nx - x
+        if abs(dx) > 1e-9:
+            # Move forward if dx agrees with facing; otherwise drive backwards along same heading.
+            forward = (dx >= 0 and math.cos(axis_pref) >= 0) or (dx <= 0 and math.cos(axis_pref) <= 0)
+            dist = abs(dx)
+            emit_straight_signed(out, dist if forward else -dist, feed_lin)
+            x = nx
+
     for path in paths:
         row_heading = 0.0
-        if path:
+        if path and not zigzag_rows:
             dx_row = path[0].p1[0] - path[0].p0[0]
             row_heading = 0.0 if dx_row >= 0 else math.pi
 
@@ -428,18 +462,16 @@ def lines_to_acode(
             set_pen(True)
             for ln in path:
                 go_to_point(ln.p1[0], ln.p1[1])
+        elif zigzag_rows:
+            axis_move_to_zigzag(path[0].p0[0], path[0].p0[1], row_heading)
+            set_pen(True)
+            for ln in path:
+                axis_move_to_zigzag(ln.p1[0], ln.p1[1], row_heading)
         else:
             axis_move_to(path[0].p0[0], path[0].p0[1], row_heading)
             set_pen(True)
-            for idx_ln, ln in enumerate(path):
-                if zigzag_rows and (idx_ln % 2 == 1):
-                    # Move backwards along heading: keep heading but drive to p1 reversing step direction.
-                    axis_move_to(ln.p1[0], ln.p1[1], row_heading)
-                    # flip heading 180 so the next move starts with backward intent
-                    row_heading = wrap_pi(row_heading + math.pi)
-                    heading = row_heading
-                else:
-                    axis_move_to(ln.p1[0], ln.p1[1], row_heading)
+            for ln in path:
+                axis_move_to(ln.p1[0], ln.p1[1], row_heading)
 
     set_pen(False)
     out.append(END_CMD)
