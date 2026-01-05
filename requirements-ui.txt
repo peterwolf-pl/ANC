@@ -1,0 +1,3 @@
+# Additional dependency for the Flask-based web UI
+-r requirements.txt
+flask

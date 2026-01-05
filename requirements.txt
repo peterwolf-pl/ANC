@@ -1,0 +1,5 @@
+# Core dependencies for ANC plotter toolkit
+numpy
+Pillow
+ezdxf
+matplotlib
