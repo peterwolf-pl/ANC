@@ -27,7 +27,7 @@ from flask import Flask, request, render_template, Response, jsonify, send_file,
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-DEFAULT_PORT = 23
+DEFAULT_PORT = 3333
 RECV_TIMEOUT_S = 0.25
 LINE_ACK_TIMEOUT_S = 60.0
 
@@ -67,8 +67,8 @@ ESTIMATE_DEFAULTS = {
     "min_sps": 50.0,
     "max_sps": 2500.0,
     "servo_settle_s": 0.18,
-    "start_sps": 120.0,
-    "accel_sps2": 8000.0,
+    "start_sps": 90.0,
+    "accel_sps2": 4000.0,
 }
 
 def estimate_motion_seconds(
@@ -206,6 +206,21 @@ def send_line(sock: socket.socket, line: str):
     data = (line.strip() + "\n").encode("utf-8")
     sock.sendall(data)
 
+def _parse_state_line(line: str) -> Optional[Dict[str, str]]:
+    if not line.startswith("STATE"):
+        return None
+    parts = line.split(maxsplit=2)
+    status = parts[1] if len(parts) > 1 else ""
+    detail = parts[2] if len(parts) > 2 else ""
+    return {"state": status or "?", "detail": detail}
+
+def _handle_sideband(line: str) -> bool:
+    st = _parse_state_line(line)
+    if st:
+        push_event("machine_state", st)
+        return True
+    return False
+
 def wait_ok(sock: socket.socket, timeout_s: float) -> bool:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -213,6 +228,8 @@ def wait_ok(sock: socket.socket, timeout_s: float) -> bool:
         if not resp:
             continue
         s = resp.strip()
+        if _handle_sideband(s):
+            continue
         if s.startswith("OK"):
             return True
         if s.startswith("ERR"):
@@ -226,6 +243,7 @@ def send_one_command(host: str, port: int, line: str, timeout_s: float = LINE_AC
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.connect((host, port))
+        push_event("status", {"msg": "connected"})
         send_line(sock, line)
         ok = wait_ok(sock, timeout_s)
         return {"ok": ok, "line": line, "error": None if ok else "timeout or ERR"}
@@ -236,6 +254,7 @@ def send_one_command(host: str, port: int, line: str, timeout_s: float = LINE_AC
             sock.close()
         except Exception:
             pass
+        push_event("status", {"msg": "disconnected"})
 
 def sender_worker():
     with state_lock:
@@ -320,6 +339,7 @@ def sender_worker():
         with state_lock:
             state.error = f"connection failed: {e}"
         push_event("error", {"msg": state.error})
+        push_event("status", {"msg": "disconnected"})
     finally:
         try:
             sock.close()
@@ -329,6 +349,7 @@ def sender_worker():
             state.running = False
             state.paused = False
             state.stopping = False
+        push_event("status", {"msg": "stopped"})
 
 def _safe_float(name: str, default: float) -> float:
     try:
@@ -1389,6 +1410,7 @@ def api_push_to_sender():
 
     lines = [ln.rstrip("\r\n") for ln in text.splitlines()]
     lines = [ln for ln in lines if ln.strip()]
+    normalized_text = "\n".join(lines) + ("\n" if lines else "")
 
     with state_lock:
         if host:
@@ -1407,7 +1429,7 @@ def api_push_to_sender():
         state.last_ok_line = ""
 
     push_event("status", {"msg": "loaded_from_generator", "lines": len(lines)})
-    return jsonify({"ok": True, "lines": len(lines)})
+    return jsonify({"ok": True, "lines": len(lines), "acode_text": normalized_text})
 
 # ----------------------------
 # Sender preview + serial tools
