@@ -272,6 +272,7 @@ def lines_to_acode(
     # W tym trybie erzac miękkiego przejścia zastępujemy osiowym ruchem (jak turn90).
     soft_rows = (line_advance == "soft") and (scan != "serpentine")
     real_90_rows = (line_advance == "real90")
+    zigzag_rows = (line_advance == "zigzag")
     if soft_rows:
         if row_angle_deg <= 0 or row_angle_deg >= 90:
             raise ValueError("row_angle_deg should be in (0, 90)")
@@ -430,8 +431,15 @@ def lines_to_acode(
         else:
             axis_move_to(path[0].p0[0], path[0].p0[1], row_heading)
             set_pen(True)
-            for ln in path:
-                axis_move_to(ln.p1[0], ln.p1[1], row_heading)
+            for idx_ln, ln in enumerate(path):
+                if zigzag_rows and (idx_ln % 2 == 1):
+                    # Move backwards along heading: keep heading but drive to p1 reversing step direction.
+                    axis_move_to(ln.p1[0], ln.p1[1], row_heading)
+                    # flip heading 180 so the next move starts with backward intent
+                    row_heading = wrap_pi(row_heading + math.pi)
+                    heading = row_heading
+                else:
+                    axis_move_to(ln.p1[0], ln.p1[1], row_heading)
 
     set_pen(False)
     out.append(END_CMD)
@@ -471,7 +479,7 @@ def main() -> int:
     ap.add_argument("--row-angle-deg", type=float, default=18.0, help="Max angle to X for row-advance legs (15-20)")
     ap.add_argument("--soft-min-dy-mm", type=float, default=0.3, help="Apply soft row-advance only if |dy| >= this value")
 
-    ap.add_argument("--line-advance", choices=["soft", "turn90", "real90"], default="soft", help="Row change mode")
+    ap.add_argument("--line-advance", choices=["soft", "turn90", "real90", "zigzag"], default="soft", help="Row change mode")
 
     ap.add_argument("--feed-lin", type=int, default=1200)
     ap.add_argument("--feed-turn", type=int, default=800)
