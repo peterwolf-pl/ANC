@@ -166,6 +166,14 @@
           <div class="row">
             <label>Host: <input id="host" value="192.168.4.1"></label>
             <label>Port: <input id="port" value="3333" inputmode="numeric"></label>
+            <label>Transport:
+              <select id="transport">
+                <option value="wifi" selected>WiFi (TCP)</option>
+                <option value="serial">Serial</option>
+              </select>
+            </label>
+            <label>Serial port: <input id="serial_port" value="/dev/ttyUSB0" style="width:150px"></label>
+            <label>Baud: <input id="serial_baud" value="115200" style="width:120px" inputmode="numeric"></label>
             <label>Start line: <input id="start_line" value="1" inputmode="numeric" style="width:120px"></label>
             <button class="btn" id="load">Load</button>
             <span class="pill" id="loaded">not loaded</span>
@@ -221,6 +229,15 @@
             <button class="btn" id="manual_send">Wyślij</button>
             <div class="err" id="serialerr"></div>
           </div>
+        </div>
+
+        <div class="box">
+          <div class="row" style="justify-content: space-between; align-items: center;">
+            <div style="font-weight:700;">Log połączenia</div>
+            <span class="pill">debug</span>
+          </div>
+          <div class="divider"></div>
+          <div id="connlog" class="mono small" style="max-height:180px; overflow:auto; white-space:pre-wrap;"></div>
         </div>
 
       </div>
@@ -894,6 +911,29 @@
     qs("machineState").textContent = state ? `State: ${state}${suffix}` : "State: -";
   }
 
+  function applyTransport(fd) {
+    fd.set("transport", qs("transport").value);
+    fd.set("host", qs("host").value.trim());
+    fd.set("port", qs("port").value.trim());
+    fd.set("serial_port", qs("serial_port").value.trim());
+    fd.set("serial_baud", qs("serial_baud").value.trim());
+  }
+
+  function appendLog(msg) {
+    const el = qs("connlog");
+    if (!el) return;
+    const line = document.createElement("div");
+    line.textContent = msg;
+    el.appendChild(line);
+    while (el.childNodes.length > 400) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function loadInitialLogs(arr) {
+    if (!Array.isArray(arr)) return;
+    arr.forEach(appendLog);
+  }
+
   function applySenderAcode(text, lineCount) {
     qs("acode").value = text || "";
     senderTotalLines = lineCount || 0;
@@ -909,8 +949,7 @@
   // Sender
   async function loadAcode() {
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("acode", qs("acode").value);
     fd.set("start_line", qs("start_line").value.trim());
 
@@ -981,6 +1020,9 @@
       if (kind === "machine_state") {
         setMachineState(payload.state, payload.detail || "");
       }
+      if (kind === "log") {
+        appendLog(payload.msg || "");
+      }
       return;
     }
 
@@ -993,6 +1035,7 @@
     if (data.last_sent) qs("current").textContent = data.last_sent;
     if (data.last_ok_idx) qs("lastok").textContent = data.last_ok_idx;
     if (data.last_ok_line) qs("lastokline").textContent = data.last_ok_line;
+    if (data.logs) loadInitialLogs(data.logs);
     if (idx) {
       const nextStart = idx + 1;
       qs("start_line").value = String(Math.max(1, Math.min(total || nextStart, nextStart)));
@@ -1014,8 +1057,7 @@
   async function sendManualLine() {
     qs("serialerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("line", qs("manual_line").value.trim());
     const out = await post("/api/serial_send", fd);
     if (out && out.line) {
@@ -1027,8 +1069,7 @@
   async function jog(dir) {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("dir", dir);
     fd.set("jog_mm", qs("jog_mm").value.trim());
     fd.set("steps_per_mm", qs("steps_per_mm").value.trim());
@@ -1045,8 +1086,7 @@
   qs("pen_up").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("mode", "up");
     post("/api/pen", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1054,8 +1094,7 @@
   qs("pen_down").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("mode", "down");
     post("/api/pen", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1063,8 +1102,7 @@
   qs("step_enable").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("cmd", qs("step_en_cmd").value.trim());
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1072,8 +1110,7 @@
   qs("step_disable").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("cmd", qs("step_dis_cmd").value.trim());
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1500,8 +1537,7 @@
     qs("generr").textContent = "";
     if (!lastGenId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
     applySenderAcode(out.acode_text || "", out.lines);
@@ -1564,8 +1600,7 @@
       return;
     }
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
     applySenderAcode(out.acode_text || "", out.lines);
@@ -1675,8 +1710,7 @@
     syncTextVizDefaults();
     if (!lastTextId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
     applySenderAcode(out.acode_text || "", out.lines);
