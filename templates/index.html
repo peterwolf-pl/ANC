@@ -733,6 +733,11 @@
             </div>
 
             <div class="setting-item">
+              <div class="label"><b>line_spacing_mm</b><span>Odstęp między liniami (mm)</span></div>
+              <div class="control"><input id="t_line_spacing_mm" value="0.6" /></div>
+            </div>
+
+            <div class="setting-item">
               <div class="label"><b>letter_height_mm</b><span>Wysokość litery w mm</span></div>
               <div class="control"><input id="t_letter_height_mm" value="12.0" /></div>
             </div>
@@ -1657,6 +1662,7 @@
     fd.set("text", text);
     fd.set("line_advance", qs("t_line_advance").value);
     fd.set("line_width_mm", qs("t_line_width_mm").value.trim());
+    fd.set("line_spacing_mm", qs("t_line_spacing_mm").value.trim());
     fd.set("letter_height_mm", qs("t_letter_height_mm").value.trim());
     fd.set("stroke_mm", qs("t_stroke_mm").value.trim());
     fd.set("render_dpi", qs("t_render_dpi").value.trim());
