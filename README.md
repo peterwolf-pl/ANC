@@ -7,7 +7,10 @@ Python utilities for generating and working with **ACODE** instructions for a di
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install ezdxf numpy pillow matplotlib flask
+pip install -r requirements.txt
+
+# Optional: dependencies for the Flask UI
+pip install -r requirements-ui.txt
 ```
 
 The scripts are standalone; install only the packages you need for the commands you plan to run (for example, `ezdxf` for DXF conversion or `matplotlib` for visualization).
