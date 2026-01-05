@@ -279,6 +279,9 @@ def lines_to_acode(
     soft_rows = (line_advance == "soft") and (scan != "serpentine")
     real_90_rows = (line_advance == "real90")
     zigzag_rows = (line_advance == "zigzag")
+    ltr_keep_heading = (line_advance == "ltr_noflip")
+    if ltr_keep_heading and scan != "ltr":
+        raise ValueError("line_advance ltr_noflip requires scan=ltr")
     if soft_rows:
         if row_angle_deg <= 0 or row_angle_deg >= 90:
             raise ValueError("row_angle_deg should be in (0, 90)")
@@ -449,9 +452,9 @@ def lines_to_acode(
             emit_straight_signed(out, dist if dx * math.cos(axis_pref) >= 0 else -dist, feed_lin)
             x = nx
 
-    for path in paths:
+    for idx_row, path in enumerate(paths):
         row_heading = 0.0
-        if path and not zigzag_rows:
+        if path and not (zigzag_rows or ltr_keep_heading):
             dx_row = path[0].p1[0] - path[0].p0[0]
             row_heading = 0.0 if dx_row >= 0 else math.pi
 
@@ -461,11 +464,16 @@ def lines_to_acode(
             set_pen(True)
             for ln in path:
                 go_to_point(ln.p1[0], ln.p1[1])
-        elif zigzag_rows:
+        elif zigzag_rows or ltr_keep_heading:
+            # Move in serpentine forward/back without flipping heading 180.
             axis_move_to_zigzag(path[0].p0[0], path[0].p0[1], row_heading)
             set_pen(True)
             for ln in path:
                 axis_move_to_zigzag(ln.p1[0], ln.p1[1], row_heading)
+            # For ltr_keep_heading, force next row start to left edge by backing up.
+            if ltr_keep_heading and idx_row + 1 < len(paths):
+                next_start_x = min(path[0].p0[0], path[0].p1[0])
+                axis_move_to_zigzag(next_start_x, y, row_heading)
         else:
             axis_move_to(path[0].p0[0], path[0].p0[1], row_heading)
             set_pen(True)
@@ -510,7 +518,7 @@ def main() -> int:
     ap.add_argument("--row-angle-deg", type=float, default=18.0, help="Max angle to X for row-advance legs (15-20)")
     ap.add_argument("--soft-min-dy-mm", type=float, default=0.3, help="Apply soft row-advance only if |dy| >= this value")
 
-    ap.add_argument("--line-advance", choices=["soft", "turn90", "real90", "zigzag"], default="soft", help="Row change mode")
+    ap.add_argument("--line-advance", choices=["soft", "turn90", "real90", "zigzag", "ltr_noflip"], default="soft", help="Row change mode")
 
     ap.add_argument("--feed-lin", type=int, default=1200)
     ap.add_argument("--feed-turn", type=int, default=800)
