@@ -1,4 +1,6 @@
-# ANC plotter toolkit
+# ANC plotter toolkit & firmware
+
+# Esp32 Arduino firmware 
 
 Python utilities for generating and working with **ACODE** instructions for a differential-drive pen plotter. The tools convert CAD or raster inputs into ACODE, preview the resulting motion, and optionally stream the commands to an ESP32-based controller or a small Flask UI.
 
