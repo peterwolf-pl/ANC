@@ -166,9 +166,22 @@
           <div class="row">
             <label>Host: <input id="host" value="192.168.4.1"></label>
             <label>Port: <input id="port" value="3333" inputmode="numeric"></label>
+            <label>Transport:
+              <select id="transport">
+                <option value="wifi" selected>WiFi (TCP)</option>
+                <option value="serial">Serial</option>
+              </select>
+            </label>
+            <label>Serial port: <input id="serial_port" value="/dev/ttyUSB0" style="width:150px"></label>
+            <label>Baud: <input id="serial_baud" value="115200" style="width:120px" inputmode="numeric"></label>
             <label>Start line: <input id="start_line" value="1" inputmode="numeric" style="width:120px"></label>
             <button class="btn" id="load">Load</button>
             <span class="pill" id="loaded">not loaded</span>
+          </div>
+
+          <div class="row">
+            <span class="pill" id="linkStatus">WiFi: -</span>
+            <span class="pill" id="machineState">State: -</span>
           </div>
 
           <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Text outline..."></textarea>
@@ -216,6 +229,15 @@
             <button class="btn" id="manual_send">Wyślij</button>
             <div class="err" id="serialerr"></div>
           </div>
+        </div>
+
+        <div class="box">
+          <div class="row" style="justify-content: space-between; align-items: center;">
+            <div style="font-weight:700;">Log połączenia</div>
+            <span class="pill">debug</span>
+          </div>
+          <div class="divider"></div>
+          <div id="connlog" class="mono small" style="max-height:180px; overflow:auto; white-space:pre-wrap;"></div>
         </div>
 
       </div>
@@ -335,15 +357,17 @@
             <div class="setting-list">
 
               <div class="setting-item">
-                <div class="label"><b>Przejście na kolejną linię</b><span>Tryb zmiany wiersza rastra</span></div>
-                <div class="control">
-                  <select id="line_advance">
-                    <option value="soft" selected>Obecne (łagodne)</option>
-                    <option value="turn90">Klasyczne: obrót 90 + przejazd prostopadły</option>
-                    <option value="real90">REAL 90: przejazdy prostopadłe, rzędy równoległe</option>
-                  </select>
-                </div>
+              <div class="label"><b>Przejście na kolejną linię</b><span>Tryb zmiany wiersza rastra</span></div>
+              <div class="control">
+                <select id="line_advance">
+                  <option value="soft" selected>Obecne (łagodne)</option>
+                  <option value="turn90">Klasyczne: obrót 90 + przejazd prostopadły</option>
+                  <option value="real90">REAL 90: przejazdy prostopadłe, rzędy równoległe</option>
+                  <option value="zigzag">ZigZag: powrót tyłem</option>
+                  <option value="ltr_noflip">LTR bez 180° (powrót tyłem)</option>
+                </select>
               </div>
+            </div>
 
               <div class="setting-item">
                 <div class="label"><b>img_width_mm</b><span>Szerokość wydruku w mm</span></div>
@@ -701,6 +725,8 @@
                   <option value="soft" selected>Obecne (łagodne)</option>
                   <option value="turn90">Klasyczne: obrót 90 + przejazd prostopadły</option>
                   <option value="real90">REAL 90: przejazdy prostopadłe, rzędy równoległe</option>
+                  <option value="zigzag">ZigZag: powrót tyłem</option>
+                  <option value="ltr_noflip">LTR bez 180° (powrót tyłem)</option>
                 </select>
               </div>
             </div>
@@ -708,6 +734,11 @@
             <div class="setting-item">
               <div class="label"><b>line_width_mm</b><span>Szerokość wiersza w mm</span></div>
               <div class="control"><input id="t_line_width_mm" value="120.0" /></div>
+            </div>
+
+            <div class="setting-item">
+              <div class="label"><b>line_spacing_mm</b><span>Odstęp między liniami (mm)</span></div>
+              <div class="control"><input id="t_line_spacing_mm" value="0.6" /></div>
             </div>
 
             <div class="setting-item">
@@ -880,11 +911,54 @@
     return `${s}s`;
   }
 
+  function setLinkStatus(txt) {
+    qs("linkStatus").textContent = txt ? `WiFi: ${txt}` : "WiFi: -";
+  }
+
+  function setMachineState(state, detail = "") {
+    const suffix = detail ? ` (${detail})` : "";
+    qs("machineState").textContent = state ? `State: ${state}${suffix}` : "State: -";
+  }
+
+  function applyTransport(fd) {
+    fd.set("transport", qs("transport").value);
+    fd.set("host", qs("host").value.trim());
+    fd.set("port", qs("port").value.trim());
+    fd.set("serial_port", qs("serial_port").value.trim());
+    fd.set("serial_baud", qs("serial_baud").value.trim());
+  }
+
+  function appendLog(msg) {
+    const el = qs("connlog");
+    if (!el) return;
+    const line = document.createElement("div");
+    line.textContent = msg;
+    el.appendChild(line);
+    while (el.childNodes.length > 400) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function loadInitialLogs(arr) {
+    if (!Array.isArray(arr)) return;
+    arr.forEach(appendLog);
+  }
+
+  function applySenderAcode(text, lineCount) {
+    qs("acode").value = text || "";
+    senderTotalLines = lineCount || 0;
+    qs("loaded").textContent = "loaded lines: " + (lineCount || 0);
+    qs("start_line").value = "1";
+    qs("progress").textContent = "0/" + (lineCount || 0);
+    qs("current").textContent = "";
+    qs("lastok").textContent = "-";
+    qs("lastokline").textContent = "";
+    qs("error").textContent = "";
+  }
+
   // Sender
   async function loadAcode() {
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("acode", qs("acode").value);
     fd.set("start_line", qs("start_line").value.trim());
 
@@ -914,6 +988,8 @@
   };
 
   // SSE
+  setLinkStatus("disconnected");
+  setMachineState("");
   const ev = new EventSource("/events");
   ev.onmessage = (e) => {
     const data = JSON.parse(e.data);
@@ -944,6 +1020,18 @@
         if (payload.line) qs("lastokline").textContent = payload.line;
       }
       if (kind === "error") qs("error").textContent = payload.msg;
+      if (kind === "status") {
+        qs("runstate").textContent = payload.msg || "idle";
+        if (payload.msg === "connected") setLinkStatus(`${qs("host").value}:${qs("port").value}`);
+        else if (payload.msg === "connecting") setLinkStatus("connecting...");
+        else if (payload.msg === "stopped" || payload.msg === "disconnected") setLinkStatus("disconnected");
+      }
+      if (kind === "machine_state") {
+        setMachineState(payload.state, payload.detail || "");
+      }
+      if (kind === "log") {
+        appendLog(payload.msg || "");
+      }
       return;
     }
 
@@ -956,6 +1044,7 @@
     if (data.last_sent) qs("current").textContent = data.last_sent;
     if (data.last_ok_idx) qs("lastok").textContent = data.last_ok_idx;
     if (data.last_ok_line) qs("lastokline").textContent = data.last_ok_line;
+    if (data.logs) loadInitialLogs(data.logs);
     if (idx) {
       const nextStart = idx + 1;
       qs("start_line").value = String(Math.max(1, Math.min(total || nextStart, nextStart)));
@@ -977,8 +1066,7 @@
   async function sendManualLine() {
     qs("serialerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("line", qs("manual_line").value.trim());
     const out = await post("/api/serial_send", fd);
     if (out && out.line) {
@@ -990,8 +1078,7 @@
   async function jog(dir) {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("dir", dir);
     fd.set("jog_mm", qs("jog_mm").value.trim());
     fd.set("steps_per_mm", qs("steps_per_mm").value.trim());
@@ -1008,8 +1095,7 @@
   qs("pen_up").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("mode", "up");
     post("/api/pen", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1017,8 +1103,7 @@
   qs("pen_down").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("mode", "down");
     post("/api/pen", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1026,8 +1111,7 @@
   qs("step_enable").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("cmd", qs("step_en_cmd").value.trim());
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1035,8 +1119,7 @@
   qs("step_disable").onclick = () => {
     qs("jogerr").textContent = "";
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     fd.set("cmd", qs("step_dis_cmd").value.trim());
     post("/api/steppers", fd).catch(e => qs("jogerr").textContent = e.message);
   };
@@ -1463,12 +1546,10 @@
     qs("generr").textContent = "";
     if (!lastGenId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
-    qs("acode").value = "loaded from generator (" + out.lines + " lines)\n";
-    qs("loaded").textContent = "loaded lines: " + out.lines;
+    applySenderAcode(out.acode_text || "", out.lines);
 
     document.querySelector('.tab[data-tab="sender"]').click();
   };
@@ -1528,12 +1609,10 @@
       return;
     }
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
-    qs("acode").value = "loaded from dxf (" + out.lines + " lines)\n";
-    qs("loaded").textContent = "loaded lines: " + out.lines;
+    applySenderAcode(out.acode_text || "", out.lines);
 
     document.querySelector('.tab[data-tab="sender"]').click();
   };
@@ -1587,6 +1666,7 @@
     fd.set("text", text);
     fd.set("line_advance", qs("t_line_advance").value);
     fd.set("line_width_mm", qs("t_line_width_mm").value.trim());
+    fd.set("line_spacing_mm", qs("t_line_spacing_mm").value.trim());
     fd.set("letter_height_mm", qs("t_letter_height_mm").value.trim());
     fd.set("stroke_mm", qs("t_stroke_mm").value.trim());
     fd.set("render_dpi", qs("t_render_dpi").value.trim());
@@ -1640,12 +1720,10 @@
     syncTextVizDefaults();
     if (!lastTextId) throw new Error("generate first");
     const fd = new FormData();
-    fd.set("host", qs("host").value.trim());
-    fd.set("port", qs("port").value.trim());
+    applyTransport(fd);
     const out = await post("/api/push_to_sender", fd);
 
-    qs("acode").value = "loaded from text outline (" + out.lines + " lines)\n";
-    qs("loaded").textContent = "loaded lines: " + out.lines;
+    applySenderAcode(out.acode_text || "", out.lines);
 
     document.querySelector('.tab[data-tab="sender"]').click();
   };

@@ -28,6 +28,7 @@ def read_acode(path: str) -> List[str]:
 def connect_tcp(host: str, port: int, connect_timeout: float) -> socket.socket:
     s = socket.create_connection((host, port), timeout=connect_timeout)
     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    recv_line_poll._buf = bytearray()
     return s
 
 def recv_line_poll(sock: socket.socket, slice_timeout: float) -> str | None:
@@ -53,6 +54,11 @@ def recv_line_poll(sock: socket.socket, slice_timeout: float) -> str | None:
     except TimeoutError:
         recv_line_poll._buf = buf
         return None
+
+
+def print_status_line(label: str, value: str) -> None:
+    sys.stdout.write(f"[{label}] {value}\n")
+    sys.stdout.flush()
 
 def estimate_motion_seconds(
     line: str,
@@ -122,12 +128,30 @@ def estimate_motion_seconds(
 
     return (2.0 * t_ramp) + t_cruise + 0.30
 
+
+def handle_sideband(resp: str) -> bool:
+    if resp.startswith("STATE"):
+        print_status_line("STATE", resp[6:].strip())
+        return True
+    return False
+
+
+def drain_sideband(sock: socket.socket, max_wait_s: float, poll_slice_s: float) -> None:
+    deadline = time.time() + max_wait_s
+    while time.time() < deadline:
+        resp = recv_line_poll(sock, poll_slice_s)
+        if resp is None:
+            break
+        if not handle_sideband(resp):
+            break
+
 def wait_ok(
     sock: socket.socket,
     line: str,
     expected_s: float,
     hard_cap_s: float,
     poll_slice_s: float,
+    sideband_cb=None,
 ) -> None:
     # Deadline with safe margin
     wait_s = max(4.0, expected_s * 3.0 + 2.0)
@@ -140,6 +164,9 @@ def wait_ok(
 
         resp = recv_line_poll(sock, poll_slice_s)
         if resp is None:
+            continue
+
+        if sideband_cb and sideband_cb(resp):
             continue
 
         if resp == "OK":
@@ -167,8 +194,8 @@ def main() -> int:
     ap.add_argument("--servo-settle-ms", type=int, default=180)
 
     # accel model (match ESP32 defaults)
-    ap.add_argument("--start-sps", type=float, default=120.0)
-    ap.add_argument("--accel-sps2", type=float, default=8000.0)
+    ap.add_argument("--start-sps", type=float, default=90.0)
+    ap.add_argument("--accel-sps2", type=float, default=4000.0)
 
     ap.add_argument("--start", type=int, default=1)
     ap.add_argument("--delay-ms", type=int, default=0)
@@ -189,7 +216,8 @@ def main() -> int:
     sock = connect_tcp(args.host, args.port, args.connect_timeout)
 
     try:
-        print(f"Connected to {args.host}:{args.port}")
+        print_status_line("WIFI", f"Connected to {args.host}:{args.port}")
+        drain_sideband(sock, max_wait_s=1.0, poll_slice_s=args.poll_slice)
         for i in range(idx0, n):
             line = lines[i]
 
@@ -212,6 +240,7 @@ def main() -> int:
                 expected_s=expected,
                 hard_cap_s=args.hard_cap,
                 poll_slice_s=args.poll_slice,
+                sideband_cb=handle_sideband,
             )
 
             print_line_status(i + 1, n, line, "OK")
@@ -237,6 +266,10 @@ def main() -> int:
 
         print("DONE")
         return 0
+
+    except (ConnectionError, TimeoutError, RuntimeError) as exc:
+        print_status_line("ERROR", str(exc))
+        return 3
 
     finally:
         try:

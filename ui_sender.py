@@ -15,6 +15,10 @@ import uuid
 import json
 import math
 import socket
+try:
+    import serial  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - pyserial optional
+    serial = None  # type: ignore
 import threading
 import queue
 import subprocess
@@ -27,7 +31,7 @@ from flask import Flask, request, render_template, Response, jsonify, send_file,
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-DEFAULT_PORT = 23
+DEFAULT_PORT = 3333
 RECV_TIMEOUT_S = 0.25
 LINE_ACK_TIMEOUT_S = 60.0
 
@@ -44,6 +48,16 @@ os.makedirs(GEN_DIR, exist_ok=True)
 os.makedirs(os.path.join(HERE, "static"), exist_ok=True)
 
 events = queue.Queue(maxsize=2000)
+LOG_RING: List[str] = []
+LOG_RING_MAX = 400
+
+def log_event(msg: str):
+    ts = time.strftime("%H:%M:%S")
+    line = f"[{ts}] {msg}"
+    LOG_RING.append(line)
+    if len(LOG_RING) > LOG_RING_MAX:
+        del LOG_RING[0:len(LOG_RING) - LOG_RING_MAX]
+    push_event("log", {"msg": line})
 
 def push_event(kind: str, payload: dict):
     msg = {"kind": kind, "payload": payload, "ts": time.time()}
@@ -67,8 +81,8 @@ ESTIMATE_DEFAULTS = {
     "min_sps": 50.0,
     "max_sps": 2500.0,
     "servo_settle_s": 0.18,
-    "start_sps": 120.0,
-    "accel_sps2": 8000.0,
+    "start_sps": 90.0,
+    "accel_sps2": 4000.0,
 }
 
 def estimate_motion_seconds(
@@ -158,6 +172,9 @@ class JobState:
     stopping: bool = False
     host: str = "192.168.4.1"
     port: int = DEFAULT_PORT
+    transport: str = "wifi"  # wifi | serial
+    serial_port: str = "/dev/ttyUSB0"
+    serial_baud: int = 115200
     lines: Optional[List[str]] = None
     idx: int = 0
     last_sent: str = ""
@@ -184,35 +201,94 @@ class GenState:
 gen_state = GenState(meta={}, viz_settings={})
 gen_lock = threading.Lock()
 
-def recv_line(sock: socket.socket, timeout_s: float) -> Optional[str]:
-    sock.settimeout(timeout_s)
-    buf = bytearray()
-    start = time.time()
-    while True:
-        if time.time() - start > timeout_s:
-            return None
+class TransportClient:
+    def __init__(self, mode: str, host: str, port: int, serial_port: str, serial_baud: int):
+        self.mode = mode
+        self.host = host
+        self.port = port
+        self.serial_port = serial_port
+        self.serial_baud = serial_baud
+        self.sock: Optional[socket.socket] = None
+        self.ser = None
+
+    def connect(self):
+        if self.mode == "serial":
+            if serial is None:
+                raise RuntimeError("pyserial not installed: pip install pyserial")
+            self.ser = serial.Serial(self.serial_port, self.serial_baud, timeout=RECV_TIMEOUT_S)
+            log_event(f"serial connected {self.serial_port}@{self.serial_baud}")
+        else:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.connect((self.host, self.port))
+            self.sock.settimeout(RECV_TIMEOUT_S)
+            log_event(f"wifi connected {self.host}:{self.port}")
+
+    def send_line(self, line: str):
+        data = (line.strip() + "\n").encode("utf-8")
+        if self.mode == "serial" and self.ser:
+            self.ser.write(data)
+        elif self.sock:
+            self.sock.sendall(data)
+        else:
+            raise RuntimeError("transport not connected")
+
+    def recv_line(self, timeout_s: float) -> Optional[str]:
+        end = time.time() + timeout_s
+        buf = bytearray()
+        while time.time() < end:
+            try:
+                if self.mode == "serial" and self.ser:
+                    b = self.ser.read(1)
+                elif self.sock:
+                    b = self.sock.recv(1)
+                else:
+                    return None
+            except socket.timeout:
+                return None
+            if not b:
+                continue
+            if b == b"\n":
+                return buf.decode("utf-8", errors="replace").strip()
+            if b != b"\r":
+                buf.extend(b)
+        return None
+
+    def close(self):
         try:
-            b = sock.recv(1)
-        except socket.timeout:
-            return None
-        if not b:
-            return None
-        if b == b"\n":
-            return buf.decode("utf-8", errors="replace").strip()
-        if b != b"\r":
-            buf.extend(b)
+            if self.ser:
+                self.ser.close()
+        except Exception:
+            pass
+        try:
+            if self.sock:
+                self.sock.close()
+        except Exception:
+            pass
 
-def send_line(sock: socket.socket, line: str):
-    data = (line.strip() + "\n").encode("utf-8")
-    sock.sendall(data)
+def _parse_state_line(line: str) -> Optional[Dict[str, str]]:
+    if not line.startswith("STATE"):
+        return None
+    parts = line.split(maxsplit=2)
+    status = parts[1] if len(parts) > 1 else ""
+    detail = parts[2] if len(parts) > 2 else ""
+    return {"state": status or "?", "detail": detail}
 
-def wait_ok(sock: socket.socket, timeout_s: float) -> bool:
+def _handle_sideband(line: str) -> bool:
+    st = _parse_state_line(line)
+    if st:
+        push_event("machine_state", st)
+        return True
+    return False
+
+def wait_ok(client: TransportClient, timeout_s: float) -> bool:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        resp = recv_line(sock, RECV_TIMEOUT_S)
+        resp = client.recv_line(RECV_TIMEOUT_S)
         if not resp:
             continue
         s = resp.strip()
+        if _handle_sideband(s):
+            continue
         if s.startswith("OK"):
             return True
         if s.startswith("ERR"):
@@ -222,25 +298,31 @@ def wait_ok(sock: socket.socket, timeout_s: float) -> bool:
             return False
     return False
 
-def send_one_command(host: str, port: int, line: str, timeout_s: float = LINE_ACK_TIMEOUT_S) -> Dict[str, Any]:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def send_one_command(client: TransportClient, line: str, timeout_s: float = LINE_ACK_TIMEOUT_S) -> Dict[str, Any]:
     try:
-        sock.connect((host, port))
-        send_line(sock, line)
-        ok = wait_ok(sock, timeout_s)
+        client.connect()
+        push_event("status", {"msg": "connected"})
+        client.send_line(line)
+        ok = wait_ok(client, timeout_s)
+        log_event(f"tx '{line}' -> {'OK' if ok else 'NO OK'}")
         return {"ok": ok, "line": line, "error": None if ok else "timeout or ERR"}
-    except OSError as e:
+    except Exception as e:
+        log_event(f"tx error: {e}")
         return {"ok": False, "line": line, "error": str(e)}
     finally:
         try:
-            sock.close()
+            client.close()
         except Exception:
             pass
+        push_event("status", {"msg": "disconnected"})
 
 def sender_worker():
     with state_lock:
         host = state.host
         port = state.port
+        transport = state.transport
+        serial_port = state.serial_port
+        serial_baud = state.serial_baud
         lines = state.lines or []
         state.last_sent = ""
         state.last_ok = False
@@ -249,10 +331,17 @@ def sender_worker():
 
     push_event("status", {"msg": "connecting", "host": host, "port": port})
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client = TransportClient(
+        mode=transport,
+        host=host,
+        port=port,
+        serial_port=serial_port,
+        serial_baud=serial_baud,
+    )
     try:
-        sock.connect((host, port))
+        client.connect()
         push_event("status", {"msg": "connected"})
+        log_event(f"worker connected via {transport}")
 
         while True:
             with state_lock:
@@ -290,14 +379,15 @@ def sender_worker():
             push_event("line", {"idx": idx + 1, "total": total, "line": line})
 
             try:
-                send_line(sock, line)
-            except OSError as e:
+                client.send_line(line)
+            except Exception as e:
                 with state_lock:
                     state.error = f"send failed: {e}"
                 push_event("error", {"msg": state.error})
+                log_event(state.error)
                 break
 
-            ok = wait_ok(sock, LINE_ACK_TIMEOUT_S)
+            ok = wait_ok(client, LINE_ACK_TIMEOUT_S)
             with state_lock:
                 state.last_ok = ok
                 if ok:
@@ -309,6 +399,7 @@ def sender_worker():
                     if not state.error:
                         state.error = "timeout waiting for OK"
                 push_event("error", {"msg": state.error})
+                log_event(state.error)
                 break
 
             push_event("ok", {"idx": idx + 1, "line": line})
@@ -320,15 +411,18 @@ def sender_worker():
         with state_lock:
             state.error = f"connection failed: {e}"
         push_event("error", {"msg": state.error})
+        push_event("status", {"msg": "disconnected"})
+        log_event(state.error)
     finally:
         try:
-            sock.close()
+            client.close()
         except Exception:
             pass
         with state_lock:
             state.running = False
             state.paused = False
             state.stopping = False
+        push_event("status", {"msg": "stopped"})
 
 def _safe_float(name: str, default: float) -> float:
     try:
@@ -911,8 +1005,11 @@ def index():
 
 @app.route("/api/load", methods=["POST"])
 def api_load():
+    transport = _safe_choice("transport", "wifi", ("wifi", "serial"))
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
     content = request.form.get("acode", "")
     start_line = _safe_int("start_line", 1)
 
@@ -926,6 +1023,9 @@ def api_load():
     with state_lock:
         state.host = host
         state.port = port
+        state.transport = transport
+        state.serial_port = serial_port
+        state.serial_baud = serial_baud
         state.lines = lines
         state.idx = start_idx
         state.error = ""
@@ -935,6 +1035,7 @@ def api_load():
         state.last_ok_line = last_ok_line
 
     push_event("status", {"msg": "loaded", "lines": len(lines)})
+    log_event(f"ACODE loaded ({len(lines)} lines) via {transport}")
     return jsonify({"ok": True, "lines": len(lines), "start_line": start_idx + 1, "duration_s": duration_s})
 
 @app.route("/api/start", methods=["POST"])
@@ -992,6 +1093,7 @@ def sse_events():
                 "last_ok_idx": state.last_ok_idx,
                 "last_ok_line": state.last_ok_line,
                 "error": state.error,
+                "logs": LOG_RING[-50:],
             }
         yield "data: " + json.dumps(snap) + "\n\n"
 
@@ -1379,8 +1481,11 @@ def download_acode(gen_id: str):
 
 @app.route("/api/push_to_sender", methods=["POST"])
 def api_push_to_sender():
+    transport = _safe_choice("transport", "wifi", ("wifi", "serial"))
     host = request.form.get("host", "").strip()
     port_s = request.form.get("port", "").strip()
+    serial_port = request.form.get("serial_port", "").strip()
+    serial_baud = _safe_int("serial_baud", 115200)
 
     with gen_lock:
         if not gen_state.acode_text:
@@ -1389,6 +1494,7 @@ def api_push_to_sender():
 
     lines = [ln.rstrip("\r\n") for ln in text.splitlines()]
     lines = [ln for ln in lines if ln.strip()]
+    normalized_text = "\n".join(lines) + ("\n" if lines else "")
 
     with state_lock:
         if host:
@@ -1398,6 +1504,12 @@ def api_push_to_sender():
                 state.port = int(port_s)
             except ValueError:
                 pass
+        if transport:
+            state.transport = transport
+        if serial_port:
+            state.serial_port = serial_port
+        if serial_baud:
+            state.serial_baud = serial_baud
         state.lines = lines
         state.idx = 0
         state.error = ""
@@ -1407,7 +1519,8 @@ def api_push_to_sender():
         state.last_ok_line = ""
 
     push_event("status", {"msg": "loaded_from_generator", "lines": len(lines)})
-    return jsonify({"ok": True, "lines": len(lines)})
+    log_event(f"ACODE pushed from generator ({len(lines)} lines) via {transport or 'wifi'}")
+    return jsonify({"ok": True, "lines": len(lines), "acode_text": normalized_text})
 
 # ----------------------------
 # Sender preview + serial tools
@@ -1456,14 +1569,24 @@ def api_serial_send():
     if err:
         return jsonify({"ok": False, "error": err}), 409
 
+    transport = _safe_choice("transport", "wifi", ("wifi", "serial"))
     host = request.form.get("host", "").strip() or "192.168.4.1"
     port = _safe_int("port", DEFAULT_PORT)
+    serial_port = request.form.get("serial_port", "").strip() or "/dev/ttyUSB0"
+    serial_baud = _safe_int("serial_baud", 115200)
     line = (request.form.get("line", "") or "").strip()
     if not line:
         return jsonify({"ok": False, "error": "missing line"}), 400
 
     push_event("line", {"idx": 0, "total": 0, "line": line})
-    out = send_one_command(host, port, line, timeout_s=LINE_ACK_TIMEOUT_S)
+    client = TransportClient(
+        mode=transport,
+        host=host,
+        port=port,
+        serial_port=serial_port,
+        serial_baud=serial_baud,
+    )
+    out = send_one_command(client, line, timeout_s=LINE_ACK_TIMEOUT_S)
     if out["ok"]:
         push_event("ok", {"idx": 0, "line": line})
         return jsonify({"ok": True, "line": line})

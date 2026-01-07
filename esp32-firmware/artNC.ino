@@ -1,5 +1,7 @@
 #include <WiFi.h>
 #include <ESP32Servo.h>   // library: "ESP32Servo"
+#include <cstring>
+#include <cstdio>
 
 // ----------------------------
 // Pins
@@ -35,7 +37,7 @@ static const int32_t MAX_STEPS_PER_CMD = 250000;
 // ----------------------------
 // Acceleration (new)
 // ----------------------------
-static const float START_STEPS_PER_SEC = 120.0f;      // start speed
+static const float START_STEPS_PER_SEC = 90.0f;       // start speed (lower to reduce jerk)
 static const float ACCEL_STEPS_PER_SEC2 = 4000.0f;    // accel/decel (steps/s^2)
 
 // ----------------------------
@@ -85,6 +87,72 @@ static bool qPop(Cmd& out) {
   out = q[qTail];
   qTail = (qTail + 1) % QCAP;
   return true;
+}
+
+static inline void qClear() {
+  qHead = 0;
+  qTail = 0;
+}
+
+// ----------------------------
+// Machine state + status
+// ----------------------------
+enum class MachineState : uint8_t { READY, BUSY, ERROR };
+
+static MachineState machineState = MachineState::READY;
+static char machineDetail[96] = "";
+
+static void sendLineAll(const char* line) {
+  Serial.print(line);
+  Serial.print("\n");
+  if (tcpClient && tcpClient.connected()) {
+    tcpClient.print(line);
+    tcpClient.print("\n");
+  }
+}
+
+static void publishState(MachineState newState, const char* detail = nullptr) {
+  bool sameState = (newState == machineState);
+  bool sameDetail = false;
+  if (detail == nullptr || detail[0] == 0) {
+    sameDetail = (machineDetail[0] == 0);
+  } else {
+    sameDetail = (strcmp(machineDetail, detail) == 0);
+  }
+
+  if (sameState && sameDetail) return;
+
+  machineState = newState;
+  if (detail && detail[0]) {
+    strncpy(machineDetail, detail, sizeof(machineDetail) - 1);
+    machineDetail[sizeof(machineDetail) - 1] = 0;
+  } else {
+    machineDetail[0] = 0;
+  }
+
+  const char* label = (newState == MachineState::READY)
+                          ? "READY"
+                          : (newState == MachineState::BUSY ? "BUSY" : "ERROR");
+
+  char buf[160];
+  if (machineDetail[0]) {
+    snprintf(buf, sizeof(buf), "STATE %s %s", label, machineDetail);
+  } else {
+    snprintf(buf, sizeof(buf), "STATE %s", label);
+  }
+  sendLineAll(buf);
+}
+
+static inline void setReady(const char* detail = nullptr) {
+  publishState(MachineState::READY, detail);
+}
+
+static inline void setBusy(const char* detail) {
+  publishState(MachineState::BUSY, detail);
+}
+
+static inline void setErrorState(const char* detail) {
+  publishState(MachineState::ERROR, detail);
 }
 
 // ----------------------------
@@ -146,6 +214,11 @@ static void replyERR(Src src, const char* msg) {
       tcpClient.print("\n");
     }
   }
+}
+
+static void reportError(Src src, const char* msg) {
+  setErrorState(msg);
+  replyERR(src, msg);
 }
 
 // Parse: "W L-123 R456 F1200"
@@ -269,53 +342,65 @@ static void handleLine(Src src, char* line) {
   }
 
   if (n == 0) {
+    setReady();
     replyOK(src);
     return;
   }
 
   // END
   if (strcmp(line, "END") == 0) {
+    setBusy("END");
     setEnable(false);
+    setReady();
     replyOK(src);
     return;
   }
 
   // H
   if (strcmp(line, "H") == 0) {
+    setBusy("HOME");
     posL = 0;
     posR = 0;
+    setReady();
     replyOK(src);
     return;
   }
 
   // E 0 / E 1
   if (line[0] == 'E') {
+    setBusy("ENABLE");
     if (strstr(line, "0")) {
       setEnable(false);
+      setReady();
       replyOK(src);
       return;
     }
     if (strstr(line, "1")) {
       setEnable(true);
+      setReady();
       replyOK(src);
       return;
     }
-    replyERR(src, "BAD_E");
+    reportError(src, "BAD_E");
     return;
   }
 
   // P U / P D
   if (line[0] == 'P') {
+    setBusy("PEN");
     if (strstr(line, "U")) {
       penUp();
+      setReady();
       replyOK(src);
       return;
     }
     if (strstr(line, "D")) {
       penDown();
+      setReady();
       replyOK(src);
       return;
     }
+    setReady();
     replyOK(src);
     return;
   }
@@ -324,15 +409,17 @@ static void handleLine(Src src, char* line) {
   if (line[0] == 'W') {
     int32_t l, r, f;
     if (!parseW(line, l, r, f)) {
-      replyERR(src, "BAD_W");
+      reportError(src, "BAD_W");
       return;
     }
+    setBusy("MOVE");
     moveWheels(l, r, f);
+    setReady();
     replyOK(src);
     return;
   }
 
-  replyERR(src, "UNKNOWN");
+  reportError(src, "UNKNOWN");
 }
 
 // ----------------------------
@@ -343,6 +430,13 @@ static int usbLen = 0;
 
 static char netBuf[160];
 static int netLen = 0;
+
+static inline void resetInputBuffers() {
+  usbLen = 0;
+  usbBuf[0] = 0;
+  netLen = 0;
+  netBuf[0] = 0;
+}
 
 static void pumpUSB() {
   while (Serial.available()) {
@@ -366,12 +460,26 @@ static void pumpUSB() {
 }
 
 static void pumpNET() {
+  if (tcpClient && !tcpClient.connected()) {
+    tcpClient.stop();
+    resetInputBuffers();
+    qClear();
+    setEnable(false);
+    setReady("TCP_LOST");
+  }
+
   if (!tcpClient || !tcpClient.connected()) {
     WiFiClient nc = server.available();
     if (nc) {
+      if (tcpClient) {
+        tcpClient.stop();
+      }
       tcpClient = nc;
       tcpClient.setNoDelay(true);
-      netLen = 0;
+      resetInputBuffers();
+      qClear();
+      setEnable(false);
+      setReady("TCP_CONNECTED");
     }
     return;
   }
@@ -425,6 +533,7 @@ void setup() {
   server.begin();
   server.setNoDelay(true);
 
+  publishState(MachineState::READY, "BOOT");
   Serial.print("OK\n");
 }
 

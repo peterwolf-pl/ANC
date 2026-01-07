@@ -70,6 +70,12 @@ def emit_straight(out: List[str], ds: float, feed_lin: int):
     s = steps_from_mm(ds)
     emit_w(out, s, s, feed_lin)
 
+def emit_straight_signed(out: List[str], ds: float, feed_lin: int):
+    """Straight move that can go backwards (negative ds)."""
+    sign = 1 if ds >= 0 else -1
+    s = steps_from_mm(abs(ds)) * sign
+    emit_w(out, s, s, feed_lin)
+
 def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
@@ -272,6 +278,10 @@ def lines_to_acode(
     # W tym trybie erzac miękkiego przejścia zastępujemy osiowym ruchem (jak turn90).
     soft_rows = (line_advance == "soft") and (scan != "serpentine")
     real_90_rows = (line_advance == "real90")
+    zigzag_rows = (line_advance == "zigzag")
+    ltr_keep_heading = (line_advance == "ltr_noflip")
+    if ltr_keep_heading and scan != "ltr":
+        raise ValueError("line_advance ltr_noflip requires scan=ltr")
     if soft_rows:
         if row_angle_deg <= 0 or row_angle_deg >= 90:
             raise ValueError("row_angle_deg should be in (0, 90)")
@@ -415,9 +425,36 @@ def lines_to_acode(
 
         axis_move_to(nx, ny, target_heading)
 
-    for path in paths:
+    def axis_move_to_zigzag(nx: float, ny: float, preferred_heading: float):
+        """Axis move that keeps heading and allows reverse motion along X."""
+        nonlocal x, y, heading
+
+        dy = ny - y
+        if abs(dy) > 1e-9:
+            axis_y = snap_axis_heading(math.pi / 2.0 if dy > 0 else -math.pi / 2.0)
+            dtheta = wrap_pi(axis_y - heading)
+            if abs(dtheta) > 1e-9:
+                emit_turn_in_place(out, dtheta, feed_turn)
+            heading = axis_y
+            emit_straight_signed(out, dy, feed_lin)
+            y = ny
+
+        axis_pref = snap_axis_heading(preferred_heading)
+        dtheta_pref = wrap_pi(axis_pref - heading)
+        if abs(dtheta_pref) > 1e-9:
+            emit_turn_in_place(out, dtheta_pref, feed_turn)
+        heading = axis_pref
+
+        dx = nx - x
+        if abs(dx) > 1e-9:
+            # Always drive along current heading; if dx opposes heading, move on reverse.
+            dist = abs(dx)
+            emit_straight_signed(out, dist if dx * math.cos(axis_pref) >= 0 else -dist, feed_lin)
+            x = nx
+
+    for idx_row, path in enumerate(paths):
         row_heading = 0.0
-        if path:
+        if path and not (zigzag_rows or ltr_keep_heading):
             dx_row = path[0].p1[0] - path[0].p0[0]
             row_heading = 0.0 if dx_row >= 0 else math.pi
 
@@ -427,6 +464,18 @@ def lines_to_acode(
             set_pen(True)
             for ln in path:
                 go_to_point(ln.p1[0], ln.p1[1])
+        elif zigzag_rows:
+            # Move in serpentine forward/back without flipping heading 180.
+            axis_move_to_zigzag(path[0].p0[0], path[0].p0[1], row_heading)
+            set_pen(True)
+            for ln in path:
+                axis_move_to_zigzag(ln.p1[0], ln.p1[1], row_heading)
+        elif ltr_keep_heading:
+            # LTR without reversing: keep heading forward and use 90-degree row changes only.
+            axis_move_to(path[0].p0[0], path[0].p0[1], 0.0)
+            set_pen(True)
+            for ln in path:
+                axis_move_to(ln.p1[0], ln.p1[1], 0.0)
         else:
             axis_move_to(path[0].p0[0], path[0].p0[1], row_heading)
             set_pen(True)
@@ -471,7 +520,7 @@ def main() -> int:
     ap.add_argument("--row-angle-deg", type=float, default=18.0, help="Max angle to X for row-advance legs (15-20)")
     ap.add_argument("--soft-min-dy-mm", type=float, default=0.3, help="Apply soft row-advance only if |dy| >= this value")
 
-    ap.add_argument("--line-advance", choices=["soft", "turn90", "real90"], default="soft", help="Row change mode")
+    ap.add_argument("--line-advance", choices=["soft", "turn90", "real90", "zigzag", "ltr_noflip"], default="soft", help="Row change mode")
 
     ap.add_argument("--feed-lin", type=int, default=1200)
     ap.add_argument("--feed-turn", type=int, default=800)
