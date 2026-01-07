@@ -464,27 +464,18 @@ def lines_to_acode(
             set_pen(True)
             for ln in path:
                 go_to_point(ln.p1[0], ln.p1[1])
-        elif zigzag_rows or ltr_keep_heading:
+        elif zigzag_rows:
             # Move in serpentine forward/back without flipping heading 180.
             axis_move_to_zigzag(path[0].p0[0], path[0].p0[1], row_heading)
             set_pen(True)
             for ln in path:
                 axis_move_to_zigzag(ln.p1[0], ln.p1[1], row_heading)
-            # For ltr_keep_heading, avoid 90deg turns when stepping to next row.
-            if ltr_keep_heading and idx_row + 1 < len(paths):
-                next_y = paths[idx_row + 1][0].p0[1]
-                dy = next_y - y
-                if abs(dy) > 1e-9:
-                    # Small-angle move to shift Y while keeping heading near 0.
-                    ang = math.radians(max(1.0, min(row_angle_deg, 89.0)))
-                    turn = ang if dy > 0 else -ang
-                    hyp = dy / math.sin(ang)
-                    emit_turn_in_place(out, turn, feed_turn)
-                    heading = wrap_pi(heading + turn)
-                    emit_straight_signed(out, hyp, feed_lin)
-                    emit_turn_in_place(out, -turn, feed_turn)
-                    heading = wrap_pi(heading - turn)
-                    y = next_y
+        elif ltr_keep_heading:
+            # LTR without reversing: keep heading forward and use 90-degree row changes only.
+            axis_move_to(path[0].p0[0], path[0].p0[1], 0.0)
+            set_pen(True)
+            for ln in path:
+                axis_move_to(ln.p1[0], ln.p1[1], 0.0)
         else:
             axis_move_to(path[0].p0[0], path[0].p0[1], row_heading)
             set_pen(True)
