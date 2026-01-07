@@ -470,10 +470,21 @@ def lines_to_acode(
             set_pen(True)
             for ln in path:
                 axis_move_to_zigzag(ln.p1[0], ln.p1[1], row_heading)
-            # For ltr_keep_heading, force next row start to left edge by backing up.
+            # For ltr_keep_heading, avoid 90deg turns when stepping to next row.
             if ltr_keep_heading and idx_row + 1 < len(paths):
-                next_start_x = min(path[0].p0[0], path[0].p1[0])
-                axis_move_to_zigzag(next_start_x, y, row_heading)
+                next_y = paths[idx_row + 1][0].p0[1]
+                dy = next_y - y
+                if abs(dy) > 1e-9:
+                    # Small-angle move to shift Y while keeping heading near 0.
+                    ang = math.radians(max(1.0, min(row_angle_deg, 89.0)))
+                    turn = ang if dy > 0 else -ang
+                    hyp = dy / math.sin(ang)
+                    emit_turn_in_place(out, turn, feed_turn)
+                    heading = wrap_pi(heading + turn)
+                    emit_straight_signed(out, hyp, feed_lin)
+                    emit_turn_in_place(out, -turn, feed_turn)
+                    heading = wrap_pi(heading - turn)
+                    y = next_y
         else:
             axis_move_to(path[0].p0[0], path[0].p0[1], row_heading)
             set_pen(True)
