@@ -153,7 +153,8 @@
 
   <div class="tabs">
     <button class="tab active" data-tab="sender">Printer</button>
-    <button class="tab" data-tab="generator">Generator PNG</button>
+    <button class="tab" data-tab="generator">Generator PNG (artacode)</button>
+    <button class="tab" data-tab="acodepng">Generator PNG (acodepng)</button>
     <button class="tab" data-tab="dxf">DXF</button>
     <button class="tab" data-tab="text">Text outline</button>
   </div>
@@ -184,7 +185,7 @@
             <span class="pill" id="machineState">State: -</span>
           </div>
 
-          <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Text outline..."></textarea>
+          <textarea id="acode" placeholder="Wklej ACODE tutaj albo wygeneruj w zakładkach Generator / Acodepng / Text outline..."></textarea>
 
           <div class="row">
             <button class="btn" id="start">Start</button>
@@ -567,6 +568,190 @@
     </div>
   </div>
 
+  <!-- Generator PNG (acodepng) -->
+  <div class="panel" id="panel-acodepng">
+    <div class="panel-grid tall">
+      <div class="column gen-vertical">
+
+        <div class="box">
+          <div class="row">
+            <input type="file" id="ap_png" accept="image/png" />
+            <button class="btn" id="ap_gen">Generate</button>
+            <span class="pill" id="ap_geninfo">no output</span>
+            <span class="pill" id="ap_genduration">est: -</span>
+            <span class="err" id="ap_generr"></span>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="gen-settings-scroll">
+            <div class="setting-list">
+              <div class="setting-item">
+                <div class="label"><b>img_width_mm</b><span>Szerokość wydruku w mm</span></div>
+                <div class="control"><input id="ap_img_width_mm" value="120.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>work_width_px</b><span>Rozdzielczość robocza w px</span></div>
+                <div class="control"><input id="ap_work_width_px" value="1600" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>line_spacing_mm</b><span>Odstęp między liniami w mm</span></div>
+                <div class="control"><input id="ap_line_spacing_mm" value="0.7" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>x_step_mm</b><span>Krok próbkowania w mm</span></div>
+                <div class="control"><input id="ap_x_step_mm" value="0.25" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>threshold</b><span>0..255, próg jasności</span></div>
+                <div class="control"><input id="ap_threshold" value="160" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>gamma</b><span>Wzmocnienie kontrastu</span></div>
+                <div class="control"><input id="ap_gamma" value="1.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>min_segment_mm</b><span>Minimalny segment kreski</span></div>
+                <div class="control"><input id="ap_min_segment_mm" value="1.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>margin_mm</b><span>Margines</span></div>
+                <div class="control"><input id="ap_margin_mm" value="0.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>path_order</b><span>Strategia układania ścieżek</span></div>
+                <div class="control">
+                  <select id="ap_path_order">
+                    <option value="nearest" selected>nearest</option>
+                    <option value="scanline">scanline</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>scan_direction</b><span>Skierowanie skanowania (scanline)</span></div>
+                <div class="control">
+                  <select id="ap_scan_direction">
+                    <option value="serpentine" selected>serpentine</option>
+                    <option value="ltr">ltr</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>no_reorder</b><span>Wyłącz reorder (nearest)</span></div>
+                <div class="control"><input type="checkbox" id="ap_no_reorder" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>invert</b><span>Odwróć jasność</span></div>
+                <div class="control"><input type="checkbox" id="ap_invert" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>flip_y</b><span>Odwróć oś Y</span></div>
+                <div class="control"><input type="checkbox" id="ap_flip_y" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>feed_lin</b><span>Feed dla jazdy prostej</span></div>
+                <div class="control"><input id="ap_feed_lin" value="1200" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>feed_turn</b><span>Feed dla skrętów</span></div>
+                <div class="control"><input id="ap_feed_turn" value="800" /></div>
+              </div>
+
+              <div class="divider"></div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_dpi</b><span>Podgląd: DPI</span></div>
+                <div class="control"><input id="ap_viz_dpi" value="160" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_arc_step_mm</b><span>Podgląd: krok łuku w mm</span></div>
+                <div class="control"><input id="ap_viz_arc_step_mm" value="1.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_arc_step_deg</b><span>Podgląd: krok łuku w stopniach</span></div>
+                <div class="control"><input id="ap_viz_arc_step_deg" value="1.0" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_equal</b><span>Podgląd: zachowaj proporcje</span></div>
+                <div class="control"><input type="checkbox" id="ap_viz_equal" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_invert_y</b><span>Podgląd: invert Y</span></div>
+                <div class="control"><input type="checkbox" id="ap_viz_invert_y" /></div>
+              </div>
+
+              <div class="setting-item">
+                <div class="label"><b>viz_home_resets_pose</b><span>Podgląd: H resetuje pozycję</span></div>
+                <div class="control"><input type="checkbox" id="ap_viz_home_resets_pose" /></div>
+              </div>
+
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="row">
+            <button class="btn" id="ap_push">Push to Sender</button>
+            <button class="btn" id="ap_download">Download .acode</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="column">
+        <div class="preview-fullwidth">
+          <div class="box">
+            <div class="small">Preview + Symulator (maszyna.png)</div>
+
+            <div class="preview-area" style="margin-top:10px;">
+              <img id="ap_previmg" alt="preview" />
+              <canvas id="simCanvasAcodepng" class="simCanvas"></canvas>
+            </div>
+
+            <div class="sim-controls">
+              <button class="btn" id="simPlayAcodepng">Play</button>
+              <button class="btn" id="simPauseAcodepng">Pause</button>
+              <button class="btn" id="simResetAcodepng">Reset</button>
+
+              <span class="pill">Speed</span>
+              <input id="simSpeedAcodepng" type="range" min="0.25" max="6" step="0.25" value="2">
+              <span class="pill mono" id="simSpeedValAcodepng">2.00x</span>
+
+              <span class="pill">Frame</span>
+              <input id="simScrubAcodepng" type="range" min="0" max="0" step="1" value="0">
+              <span class="pill mono" id="simPosAcodepng">0/0</span>
+
+              <span class="pill">Sprite scale</span>
+              <input id="simSpriteScaleAcodepng" type="range" min="0.10" max="1.00" step="0.05" value="0.35">
+              <span class="pill mono" id="simSpriteScaleValAcodepng">0.35</span>
+
+              <span class="pill">wheelbase</span>
+              <span class="pill mono" id="simWheelbaseAcodepng">-</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
   <!-- DXF -->
   <div class="panel" id="panel-dxf">
     <div class="panel-grid tall">
@@ -870,6 +1055,7 @@
       qs("panel-" + t).classList.add("active");
       requestAnimationFrame(() => {
         resizeSim("gen");
+        resizeSim("acodepng");
         resizeSim("text");
         resizeSim("sender");
         resizeSim("dxf");
@@ -1449,6 +1635,15 @@
     "simSpriteScaleGen", "simSpriteScaleValGen"
   );
 
+  const simAcodepng = makeSim(
+    "acodepng",
+    "ap_previmg", "simCanvasAcodepng",
+    "simWheelbaseAcodepng", "simPosAcodepng", "simScrubAcodepng",
+    "simPlayAcodepng", "simPauseAcodepng", "simResetAcodepng",
+    "simSpeedAcodepng", "simSpeedValAcodepng",
+    "simSpriteScaleAcodepng", "simSpriteScaleValAcodepng"
+  );
+
   const simText = makeSim(
     "text",
     "t_previmg", "simCanvasText",
@@ -1478,6 +1673,7 @@
 
   function resizeSim(which) {
     if (which === "gen") simGen.resize();
+    if (which === "acodepng") simAcodepng.resize();
     if (which === "text") simText.resize();
     if (which === "dxf") simDxf.resize();
     if (which === "sender") simSender.resize();
@@ -1561,6 +1757,78 @@
       return;
     }
     window.location.href = "/download/" + lastGenId + ".acode";
+  };
+
+  // ----------------------------
+  // Generator PNG (acodepng)
+  // ----------------------------
+  let lastAcodepngId = "";
+
+  async function generateAcodepng() {
+    qs("ap_generr").textContent = "";
+    const file = qs("ap_png").files[0];
+    if (!file) throw new Error("select a PNG first");
+
+    const fd = new FormData();
+    fd.set("png", file);
+
+    fd.set("img_width_mm", qs("ap_img_width_mm").value.trim());
+    fd.set("work_width_px", qs("ap_work_width_px").value.trim());
+    fd.set("line_spacing_mm", qs("ap_line_spacing_mm").value.trim());
+    fd.set("x_step_mm", qs("ap_x_step_mm").value.trim());
+    fd.set("threshold", qs("ap_threshold").value.trim());
+    fd.set("gamma", qs("ap_gamma").value.trim());
+    fd.set("min_segment_mm", qs("ap_min_segment_mm").value.trim());
+    fd.set("margin_mm", qs("ap_margin_mm").value.trim());
+    fd.set("path_order", qs("ap_path_order").value);
+    fd.set("scan_direction", qs("ap_scan_direction").value);
+    if (qs("ap_no_reorder").checked) fd.set("no_reorder", "1");
+    if (qs("ap_invert").checked) fd.set("invert", "1");
+    if (qs("ap_flip_y").checked) fd.set("flip_y", "1");
+    fd.set("feed_lin", qs("ap_feed_lin").value.trim());
+    fd.set("feed_turn", qs("ap_feed_turn").value.trim());
+
+    fd.set("viz_dpi", qs("ap_viz_dpi").value.trim());
+    fd.set("viz_arc_step_mm", qs("ap_viz_arc_step_mm").value.trim());
+    fd.set("viz_arc_step_deg", qs("ap_viz_arc_step_deg").value.trim());
+    if (qs("ap_viz_equal").checked) fd.set("viz_equal", "1");
+    if (qs("ap_viz_invert_y").checked) fd.set("viz_invert_y", "1");
+    if (qs("ap_viz_home_resets_pose").checked) fd.set("viz_home_resets_pose", "1");
+
+    const out = await post("/api/gen_acodepng", fd);
+    lastAcodepngId = out.gen_id;
+
+    qs("ap_geninfo").textContent = "gen_id: " + out.gen_id + " lines: " + out.acode_lines;
+    if (out.warnings && out.warnings.length) {
+      qs("ap_geninfo").textContent += " warnings: " + out.warnings.join("; ");
+    }
+    qs("ap_genduration").textContent = "est: " + formatDuration(out.duration_s);
+
+    qs("ap_previmg").src = "/preview/" + out.gen_id + ".png?ts=" + Date.now();
+    await simAcodepng.loadData(out.gen_id);
+  }
+
+  qs("ap_gen").onclick = () => generateAcodepng().catch(e => qs("ap_generr").textContent = e.message);
+
+  qs("ap_push").onclick = async () => {
+    qs("ap_generr").textContent = "";
+    if (!lastAcodepngId) throw new Error("generate first");
+    const fd = new FormData();
+    applyTransport(fd);
+    const out = await post("/api/push_to_sender", fd);
+
+    applySenderAcode(out.acode_text || "", out.lines);
+
+    document.querySelector('.tab[data-tab="sender"]').click();
+  };
+
+  qs("ap_download").onclick = () => {
+    qs("ap_generr").textContent = "";
+    if (!lastAcodepngId) {
+      qs("ap_generr").textContent = "generate first";
+      return;
+    }
+    window.location.href = "/download/" + lastAcodepngId + ".acode";
   };
 
   // ----------------------------

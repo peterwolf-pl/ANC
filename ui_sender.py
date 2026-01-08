@@ -3,6 +3,7 @@
 # Tabs:
 # - Printer: sender + jog + pen + steppers
 # - Generator: PNG -> artacodepng.py -> .acode + preview + simulator
+# - Generator (acodepng): PNG -> acodepng.py -> .acode + preview + simulator
 # - Text outline: text -> outline PNG -> artacodepng.py -> .acode + preview + simulator
 #
 # Simulator:
@@ -37,6 +38,7 @@ LINE_ACK_TIMEOUT_S = 60.0
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ARTACODEPNG_PATH = os.path.join(HERE, "artacodepng.py")
+ACODEPNG_PATH = os.path.join(HERE, "acodepng.py")
 ACODEVIZ_PATH = os.path.join(HERE, "acodeviz.py")
 ACODE_PY_PATH = os.path.join(HERE, "acode.py")
 
@@ -454,8 +456,8 @@ def _parse_line_advance(field: str) -> str:
 def _parse_y_order(field: str) -> str:
     return _safe_choice(field, "top-down", ("top-down", "bottom-up"))
 
-def _assert_tools_exist() -> Optional[str]:
-    for p in [ARTACODEPNG_PATH, ACODEVIZ_PATH, ACODE_PY_PATH]:
+def _assert_tools_exist(paths: List[str]) -> Optional[str]:
+    for p in paths:
         if not os.path.isfile(p):
             return f"missing file: {os.path.basename(p)} in {HERE}"
     return None
@@ -803,7 +805,7 @@ def render_text_outline_png(
 # Generator pipeline
 # ----------------------------
 def generate_from_png(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    err = _assert_tools_exist()
+    err = _assert_tools_exist([ARTACODEPNG_PATH, ACODEVIZ_PATH, ACODE_PY_PATH])
     if err:
         return {"ok": False, "error": err}
 
@@ -904,8 +906,99 @@ def generate_from_png(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "duration_s": duration_s,
     }
 
+def generate_from_acodepng(png_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    err = _assert_tools_exist([ACODEPNG_PATH, ACODEVIZ_PATH, ACODE_PY_PATH])
+    if err:
+        return {"ok": False, "error": err}
+
+    gen_id = str(uuid.uuid4())[:8]
+    out_acode = os.path.join(GEN_DIR, f"{gen_id}.acode")
+    out_preview = os.path.join(GEN_DIR, f"{gen_id}.preview.png")
+
+    cmd = [
+        "python3",
+        ACODEPNG_PATH,
+        png_path,
+        "--img-width-mm", str(params["img_width_mm"]),
+        "-o", out_acode,
+        "--work-width-px", str(params["work_width_px"]),
+        "--line-spacing-mm", str(params["line_spacing_mm"]),
+        "--x-step-mm", str(params["x_step_mm"]),
+        "--threshold", str(params["threshold"]),
+        "--gamma", str(params["gamma"]),
+        "--min-segment-mm", str(params["min_segment_mm"]),
+        "--margin-mm", str(params["margin_mm"]),
+        "--path-order", params["path_order"],
+        "--scan-direction", params["scan_direction"],
+        "--feed-lin", str(params["feed_lin"]),
+        "--feed-turn", str(params["feed_turn"]),
+    ]
+
+    if params.get("invert"):
+        cmd.append("--invert")
+    if params.get("flip_y"):
+        cmd.append("--flip-y")
+    if params.get("no_reorder"):
+        cmd.append("--no-reorder")
+
+    p1 = _run_cmd(cmd, cwd=HERE)
+    if p1.returncode != 0 or not os.path.isfile(out_acode):
+        msg = (p1.stderr or p1.stdout or "").strip() or "generator failed"
+        return {"ok": False, "error": msg}
+
+    cmd2 = [
+        "python3",
+        ACODEVIZ_PATH,
+        out_acode,
+        "-o", out_preview,
+        "--acode-py", ACODE_PY_PATH,
+        "--dpi", str(params["viz_dpi"]),
+        "--arc-step-mm", str(params["viz_arc_step_mm"]),
+        "--arc-step-deg", str(params["viz_arc_step_deg"]),
+    ]
+    if params.get("viz_equal"):
+        cmd2.append("--equal")
+    if params.get("viz_invert_y"):
+        cmd2.append("--invert-y")
+    if params.get("viz_home_resets_pose"):
+        cmd2.append("--home-resets-pose")
+
+    p2 = _run_cmd(cmd2, cwd=HERE)
+    if p2.returncode != 0 or not os.path.isfile(out_preview):
+        msg = (p2.stderr or p2.stdout or "").strip() or "preview failed"
+        return {"ok": False, "error": msg}
+
+    with open(out_acode, "r", encoding="utf-8", errors="ignore") as f:
+        acode_text = f.read()
+
+    lines_list = _split_acode_lines(acode_text)
+    duration_s = estimate_total_duration(lines_list, ESTIMATE_DEFAULTS)
+
+    meta = {
+        "gen_id": gen_id,
+        "warnings": [],
+        "params": params,
+        "acode_lines": len(lines_list),
+        "generator_stdout": (p1.stdout or "").strip(),
+        "generator_stderr": (p1.stderr or "").strip(),
+        "viz_stdout": (p2.stdout or "").strip(),
+        "viz_stderr": (p2.stderr or "").strip(),
+        "duration_s": duration_s,
+    }
+
+    return {
+        "ok": True,
+        "gen_id": gen_id,
+        "png_path": png_path,
+        "acode_path": out_acode,
+        "preview_path": out_preview,
+        "acode_text": acode_text,
+        "meta": meta,
+        "duration_s": duration_s,
+    }
+
 def generate_from_dxf(dxf_path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    err = _assert_tools_exist()
+    err = _assert_tools_exist([ACODE_PY_PATH, ACODEVIZ_PATH])
     if err:
         return {"ok": False, "error": err}
 
@@ -1275,6 +1368,91 @@ def api_gen():
         "warnings": result["meta"].get("warnings", []),
         "duration_s": result.get("duration_s", 0.0),
     })
+
+# ----------------------------
+# Generator: PNG (acodepng)
+# ----------------------------
+@app.route("/api/gen_acodepng", methods=["POST"])
+def api_gen_acodepng():
+    if "png" not in request.files:
+        return jsonify({"ok": False, "error": "missing file field: png"}), 400
+
+    f = request.files["png"]
+    if not f.filename.lower().endswith(".png"):
+        return jsonify({"ok": False, "error": "only .png accepted"}), 400
+
+    gen_id_tmp = str(uuid.uuid4())[:8]
+    png_path = os.path.join(UPLOADS_DIR, f"acode_{gen_id_tmp}.png")
+    f.save(png_path)
+
+    params = {
+        "img_width_mm": _safe_float("img_width_mm", 120.0),
+        "work_width_px": _safe_int("work_width_px", 1600),
+        "line_spacing_mm": _safe_float("line_spacing_mm", 0.7),
+        "x_step_mm": _safe_float("x_step_mm", 0.25),
+        "threshold": _safe_int("threshold", 160),
+        "gamma": _safe_float("gamma", 1.0),
+        "min_segment_mm": _safe_float("min_segment_mm", 1.0),
+        "invert": _safe_bool("invert"),
+        "margin_mm": _safe_float("margin_mm", 0.0),
+        "flip_y": _safe_bool("flip_y"),
+        "path_order": _safe_choice("path_order", "nearest", ("nearest", "scanline")),
+        "scan_direction": _safe_choice("scan_direction", "serpentine", ("ltr", "serpentine")),
+        "no_reorder": _safe_bool("no_reorder"),
+        "feed_lin": _safe_int("feed_lin", 1200),
+        "feed_turn": _safe_int("feed_turn", 800),
+
+        "viz_dpi": _safe_int("viz_dpi", 160),
+        "viz_arc_step_mm": _safe_float("viz_arc_step_mm", 1.0),
+        "viz_arc_step_deg": _safe_float("viz_arc_step_deg", 1.0),
+        "viz_equal": _safe_bool("viz_equal"),
+        "viz_invert_y": _safe_bool("viz_invert_y"),
+        "viz_home_resets_pose": _safe_bool("viz_home_resets_pose"),
+    }
+
+    result = generate_from_acodepng(png_path, params)
+    if not result["ok"]:
+        with gen_lock:
+            gen_state.error = result["error"]
+        return jsonify({"ok": False, "error": result["error"]}), 500
+
+    machine = resolve_machine_settings(ACODE_PY_PATH)
+    with gen_lock:
+        gen_state.gen_id = result["gen_id"]
+        gen_state.png_path = result["png_path"]
+        gen_state.acode_path = result["acode_path"]
+        gen_state.preview_path = result["preview_path"]
+        gen_state.acode_text = result["acode_text"]
+        gen_state.meta = result["meta"]
+        gen_state.error = ""
+        gen_state.viz_settings = {
+            "wheelbase_mm": machine["wheelbase_mm"],
+            "steps_per_mm": machine["steps_per_mm"],
+            "turn_gain": machine["turn_gain"],
+            "viz_arc_step_mm": params["viz_arc_step_mm"],
+            "viz_arc_step_deg": params["viz_arc_step_deg"],
+            "viz_home_resets_pose": params["viz_home_resets_pose"],
+            "viz_equal": params["viz_equal"],
+            "viz_invert_y": params["viz_invert_y"],
+        }
+
+    push_event(
+        "gen",
+        {
+            "msg": "acodepng_generated",
+            "gen_id": result["gen_id"],
+            "lines": result["meta"]["acode_lines"],
+        },
+    )
+    return jsonify(
+        {
+            "ok": True,
+            "gen_id": result["gen_id"],
+            "acode_lines": result["meta"]["acode_lines"],
+            "warnings": result["meta"].get("warnings", []),
+            "duration_s": result.get("duration_s", 0.0),
+        }
+    )
 
 # ----------------------------
 # Generator: DXF
