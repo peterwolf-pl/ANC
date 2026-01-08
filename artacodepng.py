@@ -448,8 +448,7 @@ def lines_to_acode(
         dx = nx - x
         if abs(dx) > 1e-9:
             # Always drive along current heading; if dx opposes heading, move on reverse.
-            dist = abs(dx)
-            emit_straight_signed(out, dist if dx * math.cos(axis_pref) >= 0 else -dist, feed_lin)
+            emit_straight_signed(out, dx, feed_lin)
             x = nx
 
     for idx_row, path in enumerate(paths):
